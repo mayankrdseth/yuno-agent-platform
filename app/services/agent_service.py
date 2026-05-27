@@ -47,3 +47,13 @@ async def update_agent(db: AsyncSession, agent: Agent, payload: AgentUpdate) -> 
     await db.commit()
     await db.refresh(agent)
     return agent
+
+
+async def delete_agent(db: AsyncSession, agent_id: int) -> bool:
+    """Delete agent by ID. Returns True if deleted, False if not found."""
+    agent = await get_agent(db, agent_id)
+    if not agent:
+        return False
+    await db.delete(agent)
+    await db.commit()
+    return True

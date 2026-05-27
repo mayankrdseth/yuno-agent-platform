@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
 from app.schemas.agent import AgentCreate, AgentRead, AgentUpdate
-from app.services.agent_service import create_agent, get_agent, list_agents, update_agent
+from app.services.agent_service import create_agent, delete_agent, get_agent, list_agents, update_agent
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -54,6 +54,12 @@ async def patch_agent(agent_id: int, payload: AgentUpdate, db: DbSession):
     agent = await get_agent(db, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-
     agent = await update_agent(db, agent, payload)
     return serialize_agent(agent)
+
+
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_agent(agent_id: int, db: DbSession):
+    deleted = await delete_agent(db, agent_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Agent not found")

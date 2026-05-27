@@ -70,24 +70,37 @@ def _deduplicate_agents(agents: list[Agent]) -> list[Agent]:
 def _split_agents(agents: list[Agent]) -> tuple[dict | None, list[dict]]:
     """
     Split agents into orchestrator + specialists.
-    Orchestrator is identified by:
-      1. role containing 'orchestrator' (case-insensitive), OR
-      2. channels containing 'telegram', OR
-      3. first agent in the list as fallback.
+
+    Orchestrator detection priority (NO channel-based detection):
+      1. role contains 'orchestrator' (case-insensitive)
+      2. name contains 'orchestrator' (case-insensitive)
+      3. first agent in the list as final fallback
     """
     orchestrator = None
     specialists = []
 
+    # Pass 1: find by role
     for agent in agents:
-        channels = json.loads(agent.channels) if isinstance(agent.channels, str) else (agent.channels or [])
         role_lower = (agent.role or "").lower()
-        if "orchestrator" in role_lower or "telegram" in channels:
+        if "orchestrator" in role_lower:
             if orchestrator is None:
                 orchestrator = _agent_to_dict(agent)
                 continue
         specialists.append(_agent_to_dict(agent))
 
+    # Pass 2: if still not found, find by name
+    if orchestrator is None:
+        remaining = list(agents)
+        for agent in remaining:
+            name_lower = (agent.name or "").lower()
+            if "orchestrator" in name_lower:
+                orchestrator = _agent_to_dict(agent)
+                specialists = [_agent_to_dict(a) for a in remaining if a.id != agent.id]
+                break
+
+    # Pass 3: hard fallback — first agent
     if orchestrator is None and agents:
+        logger.warning("No orchestrator found by role or name — using first agent '%s' as fallback.", agents[0].name)
         orchestrator = _agent_to_dict(agents[0])
         specialists = [_agent_to_dict(a) for a in agents[1:]]
 
@@ -117,7 +130,7 @@ async def run_workflow(
     else:
         raw_agents = await _load_active_agents(db)
 
-    # Always deduplicate — safety net regardless of path
+    # Always deduplicate
     agents = _deduplicate_agents(raw_agents)
 
     if len(agents) < 2:
