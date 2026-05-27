@@ -14,7 +14,6 @@ const API_BASE = "http://127.0.0.1:8000";
 const AVAILABLE_TOOLS = ["web_search", "wikipedia", "calculator", "datetime"];
 const AVAILABLE_CHANNELS = ["telegram", "slack", "whatsapp"];
 
-// Build nodes from agents array
 function buildNodesFromAgents(agents) {
   if (agents.length === 0) return [];
   const spacing = 260;
@@ -78,7 +77,6 @@ function App() {
   const [liveEvents, setLiveEvents] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Workflow builder state
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
@@ -103,7 +101,6 @@ function App() {
     const res = await axios.get(`${API_BASE}/agents`);
     const fetched = res.data;
     setAgents(fetched);
-    // Sync workflow builder with DB agents
     setNodes(buildNodesFromAgents(fetched));
     setEdges(buildEdgesFromAgents(fetched));
   }
@@ -121,10 +118,7 @@ function App() {
 
   async function createAgent(e) {
     e.preventDefault();
-    const payload = {
-      ...agentForm,
-      schedule: agentForm.schedule || null,
-    };
+    const payload = { ...agentForm, schedule: agentForm.schedule || null };
     await axios.post(`${API_BASE}/agents`, payload);
     setAgentForm({
       name: "",
@@ -176,7 +170,6 @@ function App() {
       type: "default",
     };
     setNodes((nds) => [...nds, newNode]);
-    // Auto-connect to last node
     if (nodes.length > 0) {
       const lastNode = nodes[nodes.length - 1];
       setEdges((eds) =>
@@ -186,6 +179,13 @@ function App() {
         )
       );
     }
+  }
+
+  function removeAgentFromWorkflow(agentId) {
+    const id = String(agentId);
+    setNodes((nds) => nds.filter((n) => n.id !== id));
+    // Remove all edges where this node is source or target
+    setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
   }
 
   const onConnect = useCallback(
@@ -266,7 +266,6 @@ function App() {
               onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })}
             />
 
-            {/* Tools checkboxes */}
             <div>
               <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -283,7 +282,6 @@ function App() {
               </div>
             </div>
 
-            {/* Channels checkboxes */}
             <div>
               <div className="muted-small" style={{ marginBottom: 6 }}>Channels</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -333,21 +331,41 @@ function App() {
                       <strong>{agent.name}</strong>
                       <div className="muted-small">{agent.role}</div>
                     </div>
-                    <button
-                      onClick={() => addAgentToWorkflow(agent)}
-                      style={{
-                        fontSize: 11,
-                        padding: "3px 10px",
-                        borderRadius: 4,
-                        border: "1px solid #1affd5",
-                        background: inGraph ? "#1affd520" : "transparent",
-                        color: "#1affd5",
-                        cursor: inGraph ? "default" : "pointer",
-                      }}
-                      disabled={inGraph}
-                    >
-                      {inGraph ? "In workflow" : "+ Add to workflow"}
-                    </button>
+                    {/* Workflow action buttons */}
+                    <div style={{ display: "flex", gap: 5 }}>
+                      {!inGraph && (
+                        <button
+                          onClick={() => addAgentToWorkflow(agent)}
+                          style={{
+                            fontSize: 11,
+                            padding: "3px 10px",
+                            borderRadius: 4,
+                            border: "1px solid #1affd5",
+                            background: "transparent",
+                            color: "#1affd5",
+                            cursor: "pointer",
+                          }}
+                        >
+                          + Add
+                        </button>
+                      )}
+                      {inGraph && (
+                        <button
+                          onClick={() => removeAgentFromWorkflow(agent.id)}
+                          style={{
+                            fontSize: 11,
+                            padding: "3px 10px",
+                            borderRadius: 4,
+                            border: "1px solid #f87171",
+                            background: "transparent",
+                            color: "#f87171",
+                            cursor: "pointer",
+                          }}
+                        >
+                          − Remove
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {tools.length > 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -382,7 +400,7 @@ function App() {
                 <h2>Visual Builder</h2>
               </div>
               <div className="muted-small" style={{ fontSize: 11, marginTop: 4 }}>
-                Drag to connect nodes &middot; Agents auto-added from DB
+                Drag handles to connect · Select a node and press Delete to remove
               </div>
             </div>
             <div className="flow-wrap">
@@ -392,6 +410,7 @@ function App() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
+                deleteKeyCode="Delete"
                 fitView
               >
                 <Background />
