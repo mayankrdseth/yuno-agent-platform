@@ -18,7 +18,7 @@ const AVAILABLE_TOOLS = ["web_search", "wikipedia", "calculator", "datetime"];
 const AVAILABLE_CHANNELS = ["telegram", "slack", "whatsapp"];
 
 /* ─────────────────────────────────────────
-   Custom Node — shows name, role, tools, channels
+   Custom Node
 ───────────────────────────────────────── */
 function CustomAgentNode({ data }) {
   const tools = data.tools || [];
@@ -27,93 +27,42 @@ function CustomAgentNode({ data }) {
   const extraTools = tools.length - visibleTools.length;
 
   return (
-    <div
-      style={{
-        background: "#1a1f2e",
-        border: data.pending ? "2px dashed #1affd5" : "1px solid #2d3348",
-        borderRadius: 10,
-        padding: "10px 14px",
-        minWidth: 180,
-        maxWidth: 220,
-        boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
-        cursor: "grab",
-      }}
-    >
-      {/* Target handle — top */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }}
-      />
+    <div style={{
+      background: "#1a1f2e",
+      border: data.pending ? "2px dashed #1affd5" : "1px solid #2d3348",
+      borderRadius: 10, padding: "10px 14px",
+      minWidth: 180, maxWidth: 220,
+      boxShadow: "0 4px 16px rgba(0,0,0,0.4)", cursor: "grab",
+    }}>
+      <Handle type="target" position={Position.Left}
+        style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }} />
 
-      {/* Agent name */}
-      <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>
-        {data.name}
-      </div>
+      <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>{data.name}</div>
+      <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{data.role}</div>
 
-      {/* Role */}
-      <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>
-        {data.role}
-      </div>
-
-      {/* Tool chips */}
       {visibleTools.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
           {visibleTools.map((t) => (
-            <span
-              key={t}
-              style={{
-                background: "#f59e0b22",
-                color: "#f59e0b",
-                border: "1px solid #f59e0b44",
-                borderRadius: 4,
-                fontSize: 10,
-                padding: "1px 5px",
-                fontWeight: 600,
-              }}
-            >
-              🔧 {t}
-            </span>
+            <span key={t} style={{ background: "#f59e0b22", color: "#f59e0b", border: "1px solid #f59e0b44", borderRadius: 4, fontSize: 10, padding: "1px 5px", fontWeight: 600 }}>🔧 {t}</span>
           ))}
-          {extraTools > 0 && (
-            <span style={{ fontSize: 10, color: "#6b7280" }}>+{extraTools} more</span>
-          )}
+          {extraTools > 0 && <span style={{ fontSize: 10, color: "#6b7280" }}>+{extraTools} more</span>}
         </div>
       )}
 
-      {/* Channel chips */}
       {channels.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
           {channels.map((c) => (
-            <span
-              key={c}
-              style={{
-                background: "#0ea5e922",
-                color: "#0ea5e9",
-                border: "1px solid #0ea5e944",
-                borderRadius: 4,
-                fontSize: 10,
-                padding: "1px 5px",
-                fontWeight: 600,
-              }}
-            >
-              📡 {c}
-            </span>
+            <span key={c} style={{ background: "#0ea5e922", color: "#0ea5e9", border: "1px solid #0ea5e944", borderRadius: 4, fontSize: 10, padding: "1px 5px", fontWeight: 600 }}>📡 {c}</span>
           ))}
         </div>
       )}
 
-      {/* Source handle — right */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }}
-      />
+      <Handle type="source" position={Position.Right}
+        style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }} />
     </div>
   );
 }
 
-// Register custom node type — must be outside component to avoid re-renders
 const nodeTypes = { agentNode: CustomAgentNode };
 
 /* ─────────────────────────────────────────
@@ -126,42 +75,26 @@ function parseList(val) {
 
 function buildAgentNode(agent, index, total) {
   const cols = Math.min(total, 4);
-  const col = index % cols;
-  const row = Math.floor(index / cols);
   return {
     id: String(agent.id),
     type: "agentNode",
-    position: { x: 80 + col * 280, y: 60 + row * 220 },
-    data: {
-      name: agent.name,
-      role: agent.role,
-      tools: parseList(agent.tools),
-      channels: parseList(agent.channels),
-      pending: false,
-    },
+    position: { x: 80 + (index % cols) * 280, y: 60 + Math.floor(index / cols) * 220 },
+    data: { name: agent.name, role: agent.role, tools: parseList(agent.tools), channels: parseList(agent.channels), pending: false },
   };
 }
 
 function buildEdgesFromAgents(agents) {
   return agents.slice(0, -1).map((agent, i) => ({
     id: `e${agent.id}-${agents[i + 1].id}`,
-    source: String(agent.id),
-    target: String(agents[i + 1].id),
-    animated: true,
-    style: { stroke: "#1affd5", strokeWidth: 2 },
+    source: String(agent.id), target: String(agents[i + 1].id),
+    animated: true, style: { stroke: "#1affd5", strokeWidth: 2 },
   }));
 }
 
 function MessageTypeTag({ type }) {
-  const colours = {
-    input: "#0ea5e9", output: "#22c55e", log: "#6b7280",
-    agent_message: "#8b5cf6", tool_call: "#f59e0b",
-  };
+  const colours = { input: "#0ea5e9", output: "#22c55e", log: "#6b7280", agent_message: "#8b5cf6", tool_call: "#f59e0b" };
   return (
-    <span style={{
-      background: colours[type] || "#6b7280", color: "#fff",
-      borderRadius: 4, padding: "1px 7px", fontSize: 11, fontWeight: 600,
-    }}>
+    <span style={{ background: colours[type] || "#6b7280", color: "#fff", borderRadius: 4, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>
       {type}
     </span>
   );
@@ -177,6 +110,7 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [liveEvents, setLiveEvents] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [runError, setRunError] = useState("");
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -216,55 +150,38 @@ export default function App() {
   // ── Agent CRUD ──
   async function createAgent(e) {
     e.preventDefault();
-    await axios.post(`${API_BASE}/agents`, {
-      ...agentForm, schedule: agentForm.schedule || null,
-    });
-    setAgentForm({
-      name: "", role: "", system_prompt: "",
-      model: "llama-3.3-70b-versatile",
-      tools: [], channels: [],
-      is_active: true, max_iterations: 5,
-      memory_enabled: true, schedule: "",
-    });
+    await axios.post(`${API_BASE}/agents`, { ...agentForm, schedule: agentForm.schedule || null });
+    setAgentForm({ name: "", role: "", system_prompt: "", model: "llama-3.3-70b-versatile", tools: [], channels: [], is_active: true, max_iterations: 5, memory_enabled: true, schedule: "" });
+    await loadAgents();
+  }
+
+  async function deleteAgent(agentId) {
+    if (!window.confirm("Delete this agent from the database permanently?")) return;
+    await axios.delete(`${API_BASE}/agents/${agentId}`);
+    // Also remove from canvas if present
+    const id = String(agentId);
+    setNodes((nds) => nds.filter((n) => n.id !== id));
+    setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
     await loadAgents();
   }
 
   function toggleTool(tool) {
-    setAgentForm((f) => ({
-      ...f,
-      tools: f.tools.includes(tool) ? f.tools.filter((t) => t !== tool) : [...f.tools, tool],
-    }));
+    setAgentForm((f) => ({ ...f, tools: f.tools.includes(tool) ? f.tools.filter((t) => t !== tool) : [...f.tools, tool] }));
   }
 
   function toggleChannel(ch) {
-    setAgentForm((f) => ({
-      ...f,
-      channels: f.channels.includes(ch) ? f.channels.filter((c) => c !== ch) : [...f.channels, ch],
-    }));
+    setAgentForm((f) => ({ ...f, channels: f.channels.includes(ch) ? f.channels.filter((c) => c !== ch) : [...f.channels, ch] }));
   }
 
   // ── Workflow builder ──
   function addAgentToWorkflow(agent) {
     if (nodes.find((n) => n.id === String(agent.id))) return;
-    // Place new node offset from last node — no auto-connect, user connects manually
     const lastNode = nodes[nodes.length - 1];
-    const x = lastNode ? lastNode.position.x + 300 : 80;
-    const y = lastNode ? lastNode.position.y + 60 : 100;
-    setNodes((nds) => [
-      ...nds,
-      {
-        id: String(agent.id),
-        type: "agentNode",
-        position: { x, y },
-        data: {
-          name: agent.name,
-          role: agent.role,
-          tools: parseList(agent.tools),
-          channels: parseList(agent.channels),
-          pending: true, // dashed border until connected
-        },
-      },
-    ]);
+    setNodes((nds) => [...nds, {
+      id: String(agent.id), type: "agentNode",
+      position: { x: lastNode ? lastNode.position.x + 300 : 80, y: lastNode ? lastNode.position.y + 60 : 100 },
+      data: { name: agent.name, role: agent.role, tools: parseList(agent.tools), channels: parseList(agent.channels), pending: true },
+    }]);
   }
 
   function removeAgentFromWorkflow(agentId) {
@@ -273,26 +190,37 @@ export default function App() {
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
   }
 
-  const onConnect = useCallback(
-    (params) => {
-      // Mark target node as connected (remove dashed border)
-      setNodes((nds) =>
-        nds.map((n) =>
-          n.id === params.target ? { ...n, data: { ...n.data, pending: false } } : n
-        )
-      );
-      setEdges((eds) =>
-        addEdge({ ...params, animated: true, style: { stroke: "#1affd5", strokeWidth: 2 } }, eds)
-      );
-    },
-    [setEdges, setNodes]
-  );
+  const onConnect = useCallback((params) => {
+    setNodes((nds) => nds.map((n) => n.id === params.target ? { ...n, data: { ...n.data, pending: false } } : n));
+    setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: "#1affd5", strokeWidth: 2 } }, eds));
+  }, [setEdges, setNodes]);
 
+  // ── Run workflow (Model B: send canvas state) ──
   async function runWorkflow() {
+    setRunError("");
+
+    // Guard: need at least 2 agents on canvas
+    if (nodes.length < 2) {
+      setRunError("Add at least 2 agents to the workflow canvas before running.");
+      return;
+    }
+
     setLoading(true);
     try {
-      await axios.post(`${API_BASE}/workflows/demo-run`, { user_input: workflowInput });
+      // Extract integer IDs from canvas nodes (node.id is a string like "3")
+      const agent_ids = nodes.map((n) => parseInt(n.id, 10));
+      // Send edges so backend knows the connection topology
+      const edgePayload = edges.map((e) => ({ source: e.source, target: e.target }));
+
+      await axios.post(`${API_BASE}/workflows/demo-run`, {
+        user_input: workflowInput,
+        agent_ids,
+        edges: edgePayload,
+      });
       await loadRuns();
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setRunError(detail || "Workflow run failed. Check backend logs.");
     } finally {
       setLoading(false);
     }
@@ -311,7 +239,6 @@ export default function App() {
 
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
 
-  // ── Render ──
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -362,7 +289,7 @@ export default function App() {
 
         {/* ── Agent List ── */}
         <section className="panel">
-          <h2>Agents</h2>
+          <h2>Agents <span className="muted-small" style={{ fontWeight: 400, fontSize: 11 }}>(catalog)</span></h2>
           <div className="list">
             {agents.map((agent) => {
               const tools = parseList(agent.tools);
@@ -376,16 +303,24 @@ export default function App() {
                       <div className="muted-small">{agent.role}</div>
                     </div>
                     <div style={{ display: "flex", gap: 5 }}>
-                      {!inGraph && (
+                      {/* Canvas toggle */}
+                      {!inGraph ? (
                         <button onClick={() => addAgentToWorkflow(agent)} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
                           + Add
                         </button>
-                      )}
-                      {inGraph && (
+                      ) : (
                         <button onClick={() => removeAgentFromWorkflow(agent.id)} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #f87171", background: "transparent", color: "#f87171", cursor: "pointer" }}>
                           − Remove
                         </button>
                       )}
+                      {/* Delete from DB */}
+                      <button
+                        onClick={() => deleteAgent(agent.id)}
+                        title="Delete from database"
+                        style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}
+                      >
+                        🗑
+                      </button>
                     </div>
                   </div>
                   {tools.length > 0 && (
@@ -417,13 +352,12 @@ export default function App() {
                 <h2>Visual Builder</h2>
               </div>
               <div className="muted-small" style={{ fontSize: 11, marginTop: 4 }}>
-                Drag node handles to connect &nbsp;·&nbsp; New nodes appear unconnected — connect manually &nbsp;·&nbsp; Select + Delete to remove
+                Drag handles to connect &nbsp;·&nbsp; Select + Delete removes edge/node &nbsp;·&nbsp; Only canvas agents run
               </div>
             </div>
             <div className="flow-wrap">
               <ReactFlow
-                nodes={nodes}
-                edges={edges}
+                nodes={nodes} edges={edges}
                 nodeTypes={nodeTypes}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
@@ -433,11 +367,8 @@ export default function App() {
               >
                 <Background color="#2d3348" gap={20} />
                 <Controls />
-                <MiniMap
-                  nodeColor={() => "#1a1f2e"}
-                  maskColor="rgba(10,12,20,0.7)"
-                  style={{ background: "#0f1117", border: "1px solid #2d3348" }}
-                />
+                <MiniMap nodeColor={() => "#1a1f2e"} maskColor="rgba(10,12,20,0.7)"
+                  style={{ background: "#0f1117", border: "1px solid #2d3348" }} />
               </ReactFlow>
             </div>
           </div>
@@ -446,9 +377,17 @@ export default function App() {
           <div className="panel">
             <div className="eyebrow">Execution</div>
             <h2>Run Workflow</h2>
+            <div className="muted-small" style={{ marginBottom: 8, fontSize: 11 }}>
+              Runs only the {nodes.length} agent{nodes.length !== 1 ? "s" : ""} currently on the canvas.
+            </div>
             <textarea rows="6" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
+            {runError && (
+              <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>
+                ⚠ {runError}
+              </div>
+            )}
             <button className="primary-btn" onClick={runWorkflow} disabled={loading}>
-              {loading ? "Running..." : "Run workflow"}
+              {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
             </button>
           </div>
         </section>
