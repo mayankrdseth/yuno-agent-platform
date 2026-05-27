@@ -5,7 +5,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from app.core.config import get_settings
 
-
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -29,9 +28,12 @@ def get_telegram_app() -> Application:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 Hello! I'm the Yuno Agent Platform bot.\n\n"
-        "Send me a research or workflow task and I'll run it through the multi-agent system.\n\n"
-        "Example:\n"
-        "Research the benefits of async Python for scalable APIs."
+        "I route your requests to the right specialist agent automatically.\n\n"
+        "Try asking me anything, for example:\n"
+        "• What is the speed of light?\n"
+        "• Calculate 15% of 2400\n"
+        "• Who is Elon Musk?\n"
+        "• What is today's date?"
     )
 
 
@@ -39,39 +41,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     from app.db.session import AsyncSessionLocal
     from app.models.workflow_run import WorkflowRun
     from app.services.run_service import complete_run, create_run
-    from app.services.workflow_service import run_demo_workflow
+    from app.services.workflow_service import run_workflow
 
     if not update.message or not update.message.text:
         return
 
     user_message = update.message.text.strip()
-    normalized_message = user_message.lower()
+    normalized = user_message.lower()
 
-    if normalized_message in GREETING_INPUTS:
+    if normalized in GREETING_INPUTS:
         await update.message.reply_text(
-            "👋 Hi! I'm your agent orchestration demo bot.\n\n"
-            "Send me a real research or workflow request, for example:\n"
-            "\"Summarize the benefits of multi-agent systems for customer support.\""
+            "👋 Hi! Send me any question or task and I'll route it to the best agent.\n\n"
+            "Examples:\n"
+            "\"Summarise the benefits of multi-agent systems\"\n"
+            "\"What is 234 * 17?\"\n"
+            "\"Tell me about the Eiffel Tower\""
         )
         return
 
-    await update.message.reply_text(
-        "⚙️ Running multi-agent workflow... please wait."
-    )
+    await update.message.reply_text("⚙️ Running multi-agent workflow... please wait.")
 
     async with AsyncSessionLocal() as db:
         run = await create_run(db, "telegram-workflow", user_message)
-        result = await run_demo_workflow(db, run.id, user_message)
 
-        run = await db.get(WorkflowRun, run.id)
-        if run:
-            await complete_run(db, run, result["final_response"])
+        try:
+            result = await run_workflow(db, run.id, user_message)
 
-    await update.message.reply_text(
-        f"✅ Workflow complete!\n\n"
-        f"Research notes:\n{result['research_notes']}\n\n"
-        f"Final response:\n{result['final_response']}"
-    )
+            run = await db.get(WorkflowRun, run.id)
+            if run:
+                await complete_run(db, run, result["final_response"])
+
+            # Build response text
+            routed_to = result.get("routing_decision", "agent")
+            reason = result.get("routing_reason", "")
+            tool_calls = result.get("tool_calls", [])
+
+            lines = [f"✅ *Workflow complete* — handled by *{routed_to}*"]
+            if reason:
+                lines.append(f"_Reason: {reason}_")
+            if tool_calls:
+                tools_used = ", ".join(tc["tool"] for tc in tool_calls)
+                lines.append(f"🔧 Tools used: {tools_used}")
+            lines.append("")
+            lines.append(result["final_response"])
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+            )
+
+        except Exception as exc:
+            logger.exception("Workflow error for run %s: %s", run.id, exc)
+            await update.message.reply_text(
+                "❌ Something went wrong while processing your request. Please try again."
+            )
 
 
 async def setup_telegram_handlers():
