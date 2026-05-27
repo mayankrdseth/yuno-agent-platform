@@ -3,6 +3,9 @@ import axios from "axios";
 import ReactFlow, {
   Background,
   Controls,
+  Handle,
+  MiniMap,
+  Position,
   addEdge,
   useEdgesState,
   useNodesState,
@@ -14,62 +17,160 @@ const API_BASE = "http://127.0.0.1:8000";
 const AVAILABLE_TOOLS = ["web_search", "wikipedia", "calculator", "datetime"];
 const AVAILABLE_CHANNELS = ["telegram", "slack", "whatsapp"];
 
-function buildNodesFromAgents(agents) {
-  if (agents.length === 0) return [];
-  const spacing = 260;
-  return agents.map((agent, i) => ({
-    id: String(agent.id),
-    position: { x: 80 + i * spacing, y: 100 },
-    data: {
-      label: (
-        <div style={{ textAlign: "center", fontSize: 13 }}>
-          <div style={{ fontWeight: 700 }}>{agent.name}</div>
-          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{agent.role}</div>
+/* ─────────────────────────────────────────
+   Custom Node — shows name, role, tools, channels
+───────────────────────────────────────── */
+function CustomAgentNode({ data }) {
+  const tools = data.tools || [];
+  const channels = data.channels || [];
+  const visibleTools = tools.slice(0, 3);
+  const extraTools = tools.length - visibleTools.length;
+
+  return (
+    <div
+      style={{
+        background: "#1a1f2e",
+        border: data.pending ? "2px dashed #1affd5" : "1px solid #2d3348",
+        borderRadius: 10,
+        padding: "10px 14px",
+        minWidth: 180,
+        maxWidth: 220,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+        cursor: "grab",
+      }}
+    >
+      {/* Target handle — top */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }}
+      />
+
+      {/* Agent name */}
+      <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>
+        {data.name}
+      </div>
+
+      {/* Role */}
+      <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>
+        {data.role}
+      </div>
+
+      {/* Tool chips */}
+      {visibleTools.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
+          {visibleTools.map((t) => (
+            <span
+              key={t}
+              style={{
+                background: "#f59e0b22",
+                color: "#f59e0b",
+                border: "1px solid #f59e0b44",
+                borderRadius: 4,
+                fontSize: 10,
+                padding: "1px 5px",
+                fontWeight: 600,
+              }}
+            >
+              🔧 {t}
+            </span>
+          ))}
+          {extraTools > 0 && (
+            <span style={{ fontSize: 10, color: "#6b7280" }}>+{extraTools} more</span>
+          )}
         </div>
-      ),
+      )}
+
+      {/* Channel chips */}
+      {channels.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+          {channels.map((c) => (
+            <span
+              key={c}
+              style={{
+                background: "#0ea5e922",
+                color: "#0ea5e9",
+                border: "1px solid #0ea5e944",
+                borderRadius: 4,
+                fontSize: 10,
+                padding: "1px 5px",
+                fontWeight: 600,
+              }}
+            >
+              📡 {c}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Source handle — right */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }}
+      />
+    </div>
+  );
+}
+
+// Register custom node type — must be outside component to avoid re-renders
+const nodeTypes = { agentNode: CustomAgentNode };
+
+/* ─────────────────────────────────────────
+   Helpers
+───────────────────────────────────────── */
+function parseList(val) {
+  if (Array.isArray(val)) return val;
+  try { return JSON.parse(val || "[]"); } catch { return []; }
+}
+
+function buildAgentNode(agent, index, total) {
+  const cols = Math.min(total, 4);
+  const col = index % cols;
+  const row = Math.floor(index / cols);
+  return {
+    id: String(agent.id),
+    type: "agentNode",
+    position: { x: 80 + col * 280, y: 60 + row * 220 },
+    data: {
+      name: agent.name,
+      role: agent.role,
+      tools: parseList(agent.tools),
+      channels: parseList(agent.channels),
+      pending: false,
     },
-    type: "default",
-  }));
+  };
 }
 
 function buildEdgesFromAgents(agents) {
-  const edges = [];
-  for (let i = 0; i < agents.length - 1; i++) {
-    edges.push({
-      id: `e${agents[i].id}-${agents[i + 1].id}`,
-      source: String(agents[i].id),
-      target: String(agents[i + 1].id),
-      animated: true,
-    });
-  }
-  return edges;
+  return agents.slice(0, -1).map((agent, i) => ({
+    id: `e${agent.id}-${agents[i + 1].id}`,
+    source: String(agent.id),
+    target: String(agents[i + 1].id),
+    animated: true,
+    style: { stroke: "#1affd5", strokeWidth: 2 },
+  }));
 }
 
 function MessageTypeTag({ type }) {
   const colours = {
-    input: "#0ea5e9",
-    output: "#22c55e",
-    log: "#6b7280",
-    agent_message: "#8b5cf6",
-    tool_call: "#f59e0b",
+    input: "#0ea5e9", output: "#22c55e", log: "#6b7280",
+    agent_message: "#8b5cf6", tool_call: "#f59e0b",
   };
   return (
-    <span
-      style={{
-        background: colours[type] || "#6b7280",
-        color: "#fff",
-        borderRadius: 4,
-        padding: "1px 7px",
-        fontSize: 11,
-        fontWeight: 600,
-      }}
-    >
+    <span style={{
+      background: colours[type] || "#6b7280", color: "#fff",
+      borderRadius: 4, padding: "1px 7px", fontSize: 11, fontWeight: 600,
+    }}>
       {type}
     </span>
   );
 }
 
-function App() {
+/* ─────────────────────────────────────────
+   App
+───────────────────────────────────────── */
+export default function App() {
   const [agents, setAgents] = useState([]);
   const [runs, setRuns] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -81,27 +182,23 @@ function App() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
   const [agentForm, setAgentForm] = useState({
-    name: "",
-    role: "",
-    system_prompt: "",
+    name: "", role: "", system_prompt: "",
     model: "llama-3.3-70b-versatile",
-    tools: [],
-    channels: [],
-    is_active: true,
-    max_iterations: 5,
-    memory_enabled: true,
-    schedule: "",
+    tools: [], channels: [],
+    is_active: true, max_iterations: 5,
+    memory_enabled: true, schedule: "",
   });
 
   const [workflowInput, setWorkflowInput] = useState(
     "Research the benefits of agent orchestration platforms for enterprise support."
   );
 
+  // ── Data loaders ──
   async function loadAgents() {
     const res = await axios.get(`${API_BASE}/agents`);
     const fetched = res.data;
     setAgents(fetched);
-    setNodes(buildNodesFromAgents(fetched));
+    setNodes(fetched.map((a, i) => buildAgentNode(a, i, fetched.length)));
     setEdges(buildEdgesFromAgents(fetched));
   }
 
@@ -116,21 +213,18 @@ function App() {
     setSelectedRunId(runId);
   }
 
+  // ── Agent CRUD ──
   async function createAgent(e) {
     e.preventDefault();
-    const payload = { ...agentForm, schedule: agentForm.schedule || null };
-    await axios.post(`${API_BASE}/agents`, payload);
+    await axios.post(`${API_BASE}/agents`, {
+      ...agentForm, schedule: agentForm.schedule || null,
+    });
     setAgentForm({
-      name: "",
-      role: "",
-      system_prompt: "",
+      name: "", role: "", system_prompt: "",
       model: "llama-3.3-70b-versatile",
-      tools: [],
-      channels: [],
-      is_active: true,
-      max_iterations: 5,
-      memory_enabled: true,
-      schedule: "",
+      tools: [], channels: [],
+      is_active: true, max_iterations: 5,
+      memory_enabled: true, schedule: "",
     });
     await loadAgents();
   }
@@ -138,144 +232,110 @@ function App() {
   function toggleTool(tool) {
     setAgentForm((f) => ({
       ...f,
-      tools: f.tools.includes(tool)
-        ? f.tools.filter((t) => t !== tool)
-        : [...f.tools, tool],
+      tools: f.tools.includes(tool) ? f.tools.filter((t) => t !== tool) : [...f.tools, tool],
     }));
   }
 
   function toggleChannel(ch) {
     setAgentForm((f) => ({
       ...f,
-      channels: f.channels.includes(ch)
-        ? f.channels.filter((c) => c !== ch)
-        : [...f.channels, ch],
+      channels: f.channels.includes(ch) ? f.channels.filter((c) => c !== ch) : [...f.channels, ch],
     }));
   }
 
+  // ── Workflow builder ──
   function addAgentToWorkflow(agent) {
-    const alreadyInGraph = nodes.find((n) => n.id === String(agent.id));
-    if (alreadyInGraph) return;
-    const newNode = {
-      id: String(agent.id),
-      position: { x: 80 + nodes.length * 260, y: 100 },
-      data: {
-        label: (
-          <div style={{ textAlign: "center", fontSize: 13 }}>
-            <div style={{ fontWeight: 700 }}>{agent.name}</div>
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{agent.role}</div>
-          </div>
-        ),
+    if (nodes.find((n) => n.id === String(agent.id))) return;
+    // Place new node offset from last node — no auto-connect, user connects manually
+    const lastNode = nodes[nodes.length - 1];
+    const x = lastNode ? lastNode.position.x + 300 : 80;
+    const y = lastNode ? lastNode.position.y + 60 : 100;
+    setNodes((nds) => [
+      ...nds,
+      {
+        id: String(agent.id),
+        type: "agentNode",
+        position: { x, y },
+        data: {
+          name: agent.name,
+          role: agent.role,
+          tools: parseList(agent.tools),
+          channels: parseList(agent.channels),
+          pending: true, // dashed border until connected
+        },
       },
-      type: "default",
-    };
-    setNodes((nds) => [...nds, newNode]);
-    if (nodes.length > 0) {
-      const lastNode = nodes[nodes.length - 1];
-      setEdges((eds) =>
-        addEdge(
-          { id: `e${lastNode.id}-${agent.id}`, source: lastNode.id, target: String(agent.id), animated: true },
-          eds
-        )
-      );
-    }
+    ]);
   }
 
   function removeAgentFromWorkflow(agentId) {
     const id = String(agentId);
     setNodes((nds) => nds.filter((n) => n.id !== id));
-    // Remove all edges where this node is source or target
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
   }
 
   const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
-    [setEdges]
+    (params) => {
+      // Mark target node as connected (remove dashed border)
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === params.target ? { ...n, data: { ...n.data, pending: false } } : n
+        )
+      );
+      setEdges((eds) =>
+        addEdge({ ...params, animated: true, style: { stroke: "#1affd5", strokeWidth: 2 } }, eds)
+      );
+    },
+    [setEdges, setNodes]
   );
 
   async function runWorkflow() {
     setLoading(true);
     try {
-      await axios.post(`${API_BASE}/workflows/demo-run`, {
-        user_input: workflowInput,
-      });
+      await axios.post(`${API_BASE}/workflows/demo-run`, { user_input: workflowInput });
       await loadRuns();
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    loadAgents();
-    loadRuns();
-  }, []);
+  useEffect(() => { loadAgents(); loadRuns(); }, []);
 
   useEffect(() => {
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/monitor");
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
       setLiveEvents((prev) => [data, ...prev].slice(0, 30));
     };
     return () => ws.close();
   }, []);
 
-  const selectedRun = useMemo(
-    () => runs.find((r) => r.id === selectedRunId),
-    [runs, selectedRunId]
-  );
+  const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
 
+  // ── Render ──
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div>
           <div className="eyebrow">Yuno Challenge</div>
           <h1>Agent Orchestration Platform</h1>
-          <p className="muted">
-            Manage agents, run workflows, inspect history, and monitor live events.
-          </p>
+          <p className="muted">Manage agents, run workflows, inspect history, and monitor live events.</p>
         </div>
 
         {/* ── Create Agent ── */}
         <section className="panel">
           <h2>Create Agent</h2>
           <form onSubmit={createAgent} className="form-grid">
-            <input
-              placeholder="Agent name"
-              value={agentForm.name}
-              onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })}
-              required
-            />
-            <input
-              placeholder="Role (e.g. Orchestrator, Research Specialist)"
-              value={agentForm.role}
-              onChange={(e) => setAgentForm({ ...agentForm, role: e.target.value })}
-              required
-            />
-            <textarea
-              placeholder="System prompt"
-              rows="4"
-              value={agentForm.system_prompt}
-              onChange={(e) =>
-                setAgentForm({ ...agentForm, system_prompt: e.target.value })
-              }
-              required
-            />
-            <input
-              placeholder="Model"
-              value={agentForm.model}
-              onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })}
-            />
+            <input placeholder="Agent name" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} required />
+            <input placeholder="Role (e.g. Orchestrator, Research Specialist)" value={agentForm.role} onChange={(e) => setAgentForm({ ...agentForm, role: e.target.value })} required />
+            <textarea placeholder="System prompt" rows="4" value={agentForm.system_prompt} onChange={(e) => setAgentForm({ ...agentForm, system_prompt: e.target.value })} required />
+            <input placeholder="Model" value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} />
 
             <div>
               <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {AVAILABLE_TOOLS.map((tool) => (
                   <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={agentForm.tools.includes(tool)}
-                      onChange={() => toggleTool(tool)}
-                    />
+                    <input type="checkbox" checked={agentForm.tools.includes(tool)} onChange={() => toggleTool(tool)} />
                     {tool}
                   </label>
                 ))}
@@ -287,27 +347,15 @@ function App() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {AVAILABLE_CHANNELS.map((ch) => (
                   <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={agentForm.channels.includes(ch)}
-                      onChange={() => toggleChannel(ch)}
-                    />
+                    <input type="checkbox" checked={agentForm.channels.includes(ch)} onChange={() => toggleChannel(ch)} />
                     {ch}
                   </label>
                 ))}
               </div>
             </div>
 
-            <input
-              type="number"
-              min="1"
-              max="20"
-              placeholder="Max iterations"
-              value={agentForm.max_iterations}
-              onChange={(e) =>
-                setAgentForm({ ...agentForm, max_iterations: Number(e.target.value) })
-              }
-            />
+            <input type="number" min="1" max="20" placeholder="Max iterations" value={agentForm.max_iterations}
+              onChange={(e) => setAgentForm({ ...agentForm, max_iterations: Number(e.target.value) })} />
             <button className="primary-btn" type="submit">Create agent</button>
           </form>
         </section>
@@ -317,12 +365,8 @@ function App() {
           <h2>Agents</h2>
           <div className="list">
             {agents.map((agent) => {
-              const tools = Array.isArray(agent.tools)
-                ? agent.tools
-                : JSON.parse(agent.tools || "[]");
-              const channels = Array.isArray(agent.channels)
-                ? agent.channels
-                : JSON.parse(agent.channels || "[]");
+              const tools = parseList(agent.tools);
+              const channels = parseList(agent.channels);
               const inGraph = nodes.some((n) => n.id === String(agent.id));
               return (
                 <div className="list-item" key={agent.id} style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
@@ -331,37 +375,14 @@ function App() {
                       <strong>{agent.name}</strong>
                       <div className="muted-small">{agent.role}</div>
                     </div>
-                    {/* Workflow action buttons */}
                     <div style={{ display: "flex", gap: 5 }}>
                       {!inGraph && (
-                        <button
-                          onClick={() => addAgentToWorkflow(agent)}
-                          style={{
-                            fontSize: 11,
-                            padding: "3px 10px",
-                            borderRadius: 4,
-                            border: "1px solid #1affd5",
-                            background: "transparent",
-                            color: "#1affd5",
-                            cursor: "pointer",
-                          }}
-                        >
+                        <button onClick={() => addAgentToWorkflow(agent)} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
                           + Add
                         </button>
                       )}
                       {inGraph && (
-                        <button
-                          onClick={() => removeAgentFromWorkflow(agent.id)}
-                          style={{
-                            fontSize: 11,
-                            padding: "3px 10px",
-                            borderRadius: 4,
-                            border: "1px solid #f87171",
-                            background: "transparent",
-                            color: "#f87171",
-                            cursor: "pointer",
-                          }}
-                        >
+                        <button onClick={() => removeAgentFromWorkflow(agent.id)} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #f87171", background: "transparent", color: "#f87171", cursor: "pointer" }}>
                           − Remove
                         </button>
                       )}
@@ -369,16 +390,12 @@ function App() {
                   </div>
                   {tools.length > 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {tools.map((t) => (
-                        <span key={t} className="badge" style={{ background: "#f59e0b20", color: "#f59e0b", fontSize: 10 }}>{t}</span>
-                      ))}
+                      {tools.map((t) => <span key={t} className="badge" style={{ background: "#f59e0b20", color: "#f59e0b", fontSize: 10 }}>🔧 {t}</span>)}
                     </div>
                   )}
                   {channels.length > 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {channels.map((c) => (
-                        <span key={c} className="badge" style={{ background: "#0ea5e920", color: "#0ea5e9", fontSize: 10 }}>{c}</span>
-                      ))}
+                      {channels.map((c) => <span key={c} className="badge" style={{ background: "#0ea5e920", color: "#0ea5e9", fontSize: 10 }}>📡 {c}</span>)}
                     </div>
                   )}
                 </div>
@@ -400,21 +417,27 @@ function App() {
                 <h2>Visual Builder</h2>
               </div>
               <div className="muted-small" style={{ fontSize: 11, marginTop: 4 }}>
-                Drag handles to connect · Select a node and press Delete to remove
+                Drag node handles to connect &nbsp;·&nbsp; New nodes appear unconnected — connect manually &nbsp;·&nbsp; Select + Delete to remove
               </div>
             </div>
             <div className="flow-wrap">
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
+                nodeTypes={nodeTypes}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
                 deleteKeyCode="Delete"
                 fitView
               >
-                <Background />
+                <Background color="#2d3348" gap={20} />
                 <Controls />
+                <MiniMap
+                  nodeColor={() => "#1a1f2e"}
+                  maskColor="rgba(10,12,20,0.7)"
+                  style={{ background: "#0f1117", border: "1px solid #2d3348" }}
+                />
               </ReactFlow>
             </div>
           </div>
@@ -423,11 +446,7 @@ function App() {
           <div className="panel">
             <div className="eyebrow">Execution</div>
             <h2>Run Workflow</h2>
-            <textarea
-              rows="6"
-              value={workflowInput}
-              onChange={(e) => setWorkflowInput(e.target.value)}
-            />
+            <textarea rows="6" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
             <button className="primary-btn" onClick={runWorkflow} disabled={loading}>
               {loading ? "Running..." : "Run workflow"}
             </button>
@@ -439,22 +458,12 @@ function App() {
           {/* ── Workflow Runs ── */}
           <div className="panel">
             <div className="panel-header">
-              <div>
-                <div className="eyebrow">Persistence</div>
-                <h2>Workflow Runs</h2>
-              </div>
+              <div><div className="eyebrow">Persistence</div><h2>Workflow Runs</h2></div>
             </div>
             <div className="list">
               {runs.map((run) => (
-                <button
-                  key={run.id}
-                  className={`run-card ${selectedRunId === run.id ? "active" : ""}`}
-                  onClick={() => loadMessages(run.id)}
-                >
-                  <div className="run-card-top">
-                    <strong>Run #{run.id}</strong>
-                    <span className="badge">{run.status}</span>
-                  </div>
+                <button key={run.id} className={`run-card ${selectedRunId === run.id ? "active" : ""}`} onClick={() => loadMessages(run.id)}>
+                  <div className="run-card-top"><strong>Run #{run.id}</strong><span className="badge">{run.status}</span></div>
                   <div className="muted-small">{run.workflow_name}</div>
                   <div className="run-input">{run.input_text}</div>
                 </button>
@@ -466,64 +475,42 @@ function App() {
           {/* ── Message History ── */}
           <div className="panel">
             <div className="panel-header">
-              <div>
-                <div className="eyebrow">Messages</div>
-                <h2>
-                  {selectedRun ? `Run #${selectedRun.id} History` : "Select a run"}
-                </h2>
+              <div><div className="eyebrow">Messages</div>
+                <h2>{selectedRun ? `Run #${selectedRun.id} History` : "Select a run"}</h2>
               </div>
             </div>
             <div className="messages">
               {messages.map((msg) => (
-                <div
-                  className="message-card"
-                  key={msg.id}
-                  style={msg.message_type === "tool_call" ? { borderLeft: "3px solid #f59e0b" } : {}}
-                >
+                <div className="message-card" key={msg.id} style={msg.message_type === "tool_call" ? { borderLeft: "3px solid #f59e0b" } : {}}>
                   <div className="message-meta">
                     <strong>{msg.sender}</strong>
-                    <span className="muted-small">
-                      {msg.receiver ? `→ ${msg.receiver}` : ""}
-                    </span>
+                    <span className="muted-small">{msg.receiver ? `→ ${msg.receiver}` : ""}</span>
                     <MessageTypeTag type={msg.message_type} />
                   </div>
                   <div style={{ fontSize: 13 }}>{msg.content}</div>
                 </div>
               ))}
-              {selectedRunId && messages.length === 0 && (
-                <div className="muted-small">No messages found.</div>
-              )}
+              {selectedRunId && messages.length === 0 && <div className="muted-small">No messages found.</div>}
             </div>
           </div>
 
           {/* ── Live Monitor ── */}
           <div className="panel">
             <div className="panel-header">
-              <div>
-                <div className="eyebrow">Monitoring</div>
-                <h2>Live Event Stream</h2>
-              </div>
+              <div><div className="eyebrow">Monitoring</div><h2>Live Event Stream</h2></div>
             </div>
             <div className="messages">
               {liveEvents.map((event, idx) => (
-                <div
-                  className="message-card"
-                  key={idx}
-                  style={event.type === "tool_call" ? { borderLeft: "3px solid #f59e0b" } : {}}
-                >
+                <div className="message-card" key={idx} style={event.type === "tool_call" ? { borderLeft: "3px solid #f59e0b" } : {}}>
                   <div className="message-meta">
                     <strong>{event.sender}</strong>
-                    <span className="muted-small">
-                      {event.receiver ? `→ ${event.receiver}` : ""}
-                    </span>
+                    <span className="muted-small">{event.receiver ? `→ ${event.receiver}` : ""}</span>
                     <span className="badge subtle">run #{event.run_id} · {event.type}</span>
                   </div>
                   <div style={{ fontSize: 13 }}>{event.content}</div>
                 </div>
               ))}
-              {liveEvents.length === 0 && (
-                <div className="muted-small">Waiting for events...</div>
-              )}
+              {liveEvents.length === 0 && <div className="muted-small">Waiting for events...</div>}
             </div>
           </div>
         </section>
@@ -531,5 +518,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
