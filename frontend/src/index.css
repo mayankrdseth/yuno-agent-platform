@@ -1,0 +1,364 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+:root {
+  --bg: #0f1117;
+  --bg-elevated: #151925;
+  --panel: #171b28;
+  --panel-soft: #1d2333;
+  --panel-muted: #20283a;
+  --text: #eef2ff;
+  --text-muted: #9aa4bf;
+  --text-faint: #6f7892;
+  --border: #2a3145;
+  --accent: #6ee7c8;
+  --accent-strong: #28c7a2;
+  --accent-soft: rgba(110, 231, 200, 0.12);
+  --danger: #ff7a7a;
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  --radius: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  font-family: "Inter", system-ui, sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(110, 231, 200, 0.08), transparent 24%),
+    linear-gradient(180deg, #0d1018 0%, #0f1117 100%);
+  color: var(--text);
+}
+
+body {
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: #111624;
+  color: var(--text);
+  border-radius: 14px;
+  padding: 12px 14px;
+  resize: vertical;
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 4px rgba(110, 231, 200, 0.12);
+}
+
+#root {
+  width: 100%;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: rgba(12, 15, 23, 0.88);
+  border-right: 1px solid var(--border);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: auto;
+}
+
+.main-content {
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+h1,
+h2 {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+h1 {
+  font-size: 2.35rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  margin-bottom: 10px;
+}
+
+h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.muted-small {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(27, 33, 48, 0.96), rgba(20, 24, 36, 0.96));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.primary-btn {
+  width: 100%;
+  border-radius: 14px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  color: #08110f;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+  box-shadow: 0 10px 24px rgba(40, 199, 162, 0.22);
+}
+
+.primary-btn:hover {
+  transform: translateY(-1px);
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.top-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+  gap: 20px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.flow-wrap {
+  height: 340px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #0d1119;
+}
+
+.list,
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 520px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.list-item,
+.message-card,
+.run-card {
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  border-radius: 16px;
+  padding: 14px;
+  min-width: 0;
+}
+
+.list-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-card {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.run-card:hover {
+  transform: translateY(-1px);
+  border-color: #3b4663;
+}
+
+.run-card.active {
+  background: rgba(110, 231, 200, 0.08);
+  border-color: rgba(110, 231, 200, 0.48);
+}
+
+.run-card-top,
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.run-input,
+.message-card div:last-child {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.73rem;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(110, 231, 200, 0.16);
+}
+
+.badge.subtle {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.react-flow__node-default {
+  background: #151c28;
+  color: var(--text);
+  border: 1px solid #2d3a52;
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+}
+
+.react-flow__controls {
+  box-shadow: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: #131826;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.react-flow__background {
+  background-color: #0d1119;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2d374d;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (max-width: 1280px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .top-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .main-content,
+  .sidebar {
+    padding: 20px;
+  }
+
+  h1 {
+    font-size: 1.9rem;
+  }
+}
