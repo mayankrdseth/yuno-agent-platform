@@ -31,22 +31,12 @@ from app.runtime.tools import format_tools_for_prompt, get_tools_for_agent
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Helper: run a single LLM call with optional tool execution
-# ---------------------------------------------------------------------------
-
 async def run_agent_with_tools(
     system_prompt: str,
     user_message: str,
     tool_names: list[str],
     agent_name: str,
 ) -> tuple[str, list[dict]]:
-    """
-    Run an agent:
-    1. Ask the LLM if it needs a tool.
-    2. If yes, execute the tool and feed result back.
-    3. Return the final text response and a log of tool calls made.
-    """
     llm = get_llm()
     tool_calls_log: list[dict] = []
     tools = get_tools_for_agent(tool_names)
@@ -69,7 +59,6 @@ async def run_agent_with_tools(
     response = await llm.ainvoke(messages)
     reply = response.content.strip()
 
-    # Check if the LLM decided to call a tool
     if tools and reply.startswith("{"):
         try:
             parsed = json.loads(reply)
@@ -81,33 +70,24 @@ async def run_agent_with_tools(
                 tool_result = await tools[tool_name](tool_input)
                 tool_calls_log.append({"tool": tool_name, "input": tool_input, "result": tool_result})
 
-                # Second LLM call with tool result incorporated
                 followup = [
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=user_message),
-                    SystemMessage(content=f"Tool result from {tool_name}:\n{tool_result}\n\nNow provide your final answer."),
+                    SystemMessage(content=f"Tool result from {tool_name}:\n{tool_result}\nNow provide your final answer."),
                 ]
                 final_response = await llm.ainvoke(followup)
                 reply = final_response.content.strip()
         except (json.JSONDecodeError, KeyError):
-            pass  # Not a valid tool call — treat as plain response
+            pass
 
     return reply, tool_calls_log
 
-
-# ---------------------------------------------------------------------------
-# LLM Router
-# ---------------------------------------------------------------------------
 
 async def llm_route(
     user_input: str,
     orchestrator_system_prompt: str,
     specialist_agents: list[dict],
 ) -> dict[str, Any]:
-    """
-    Ask the orchestrator LLM to choose which specialist agent should handle the task.
-    Returns {"target": <agent_name>, "reason": <str>}
-    """
     llm = get_llm()
 
     agent_list = "\n".join(
@@ -127,7 +107,6 @@ async def llm_route(
     response = await llm.ainvoke(routing_prompt)
     reply = response.content.strip()
 
-    # Extract JSON even if LLM wraps it in markdown code blocks
     json_match = re.search(r'\{.*?\}', reply, re.DOTALL)
     if json_match:
         try:
@@ -136,14 +115,9 @@ async def llm_route(
         except json.JSONDecodeError:
             pass
 
-    # Fallback: pick first specialist
     fallback = specialist_agents[0]["name"] if specialist_agents else "fallback"
     return {"target": fallback, "reason": "routing fallback"}
 
-
-# ---------------------------------------------------------------------------
-# Graph builder
-# ---------------------------------------------------------------------------
 
 def build_agent_graph(
     orchestrator: dict,
@@ -151,42 +125,47 @@ def build_agent_graph(
 ):
     """
     Build and compile a LangGraph from agent configs.
-
-    Parameters
-    ----------
-    orchestrator : dict with keys name, role, system_prompt, tools (list[str])
-    specialists  : list of dicts with the same keys
+    Deduplicates specialists by name before building to prevent
+    'Node already present' ValueError from LangGraph.
     """
-
     if not specialists:
-        raise ValueError("At least one specialist agent is required to build a workflow.")
+        raise ValueError("At least one specialist agent is required.")
+
+    # Deduplicate specialists by name (safety net — service layer should already do this)
+    seen: set[str] = set()
+    unique_specialists: list[dict] = []
+    for s in specialists:
+        if s["name"] not in seen:
+            seen.add(s["name"])
+            unique_specialists.append(s)
+        else:
+            logger.warning("Duplicate specialist '%s' dropped in graph builder.", s["name"])
+    specialists = unique_specialists
+
+    # Also guard: orchestrator name must not clash with any specialist name
+    specialists = [s for s in specialists if s["name"] != orchestrator["name"]]
 
     specialist_map = {a["name"]: a for a in specialists}
 
-    # -- Orchestrator node --
     async def orchestrator_node(state: WorkflowState) -> WorkflowState:
         state["current_step"] = "orchestrator"
         state["status"] = "running"
-
         route = await llm_route(
             user_input=state["user_input"],
             orchestrator_system_prompt=orchestrator["system_prompt"],
             specialist_agents=specialists,
         )
-
         state["routing_decision"] = route.get("target", specialists[0]["name"])
         state["routing_reason"] = route.get("reason", "")
         logger.info("Orchestrator routed to: %s (%s)", state["routing_decision"], state["routing_reason"])
         return state
 
-    # -- Routing function --
     def route_from_orchestrator(state: WorkflowState) -> str:
         target = state.get("routing_decision", "")
         if target in specialist_map:
             return target
-        return specialists[0]["name"]  # safe fallback
+        return specialists[0]["name"]
 
-    # -- Specialist node factory --
     def make_specialist_node(agent_config: dict):
         async def specialist_node(state: WorkflowState) -> WorkflowState:
             name = agent_config["name"]
@@ -209,7 +188,6 @@ def build_agent_graph(
         specialist_node.__name__ = agent_config["name"]
         return specialist_node
 
-    # -- Build graph --
     graph = StateGraph(WorkflowState)
     graph.add_node("orchestrator", orchestrator_node)
 

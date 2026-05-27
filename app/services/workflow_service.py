@@ -1,9 +1,9 @@
 """
 Workflow service.
 
-Loads orchestrator and specialist agents from the database,
-builds a dynamic LangGraph, and executes it.
-Publishes every step to the WebSocket broadcast channel.
+Model B: the canvas is the workflow definition.
+- When agent_ids is provided (from frontend canvas), only those agents are loaded.
+- When agent_ids is None (e.g. Telegram), all active agents are loaded as fallback.
 """
 from __future__ import annotations
 
@@ -29,33 +29,58 @@ def _agent_to_dict(agent: Agent) -> dict:
         "role": agent.role,
         "system_prompt": agent.system_prompt,
         "model": agent.model,
-        "tools": json.loads(agent.tools) if isinstance(agent.tools, str) else agent.tools,
-        "channels": json.loads(agent.channels) if isinstance(agent.channels, str) else agent.channels,
+        "tools": json.loads(agent.tools) if isinstance(agent.tools, str) else (agent.tools or []),
+        "channels": json.loads(agent.channels) if isinstance(agent.channels, str) else (agent.channels or []),
         "max_iterations": agent.max_iterations,
         "memory_enabled": agent.memory_enabled,
     }
 
 
 async def _load_active_agents(db: AsyncSession) -> list[Agent]:
+    """Fallback: load all active agents (used by Telegram / callers without a canvas)."""
     result = await db.execute(select(Agent).where(Agent.is_active == True))  # noqa: E712
     return list(result.scalars().all())
 
 
+async def _load_agents_by_ids(db: AsyncSession, agent_ids: list[int]) -> list[Agent]:
+    """Model B: load only the agents the user placed on the canvas."""
+    result = await db.execute(
+        select(Agent).where(Agent.id.in_(agent_ids), Agent.is_active == True)  # noqa: E712
+    )
+    agents = list(result.scalars().all())
+    # Preserve canvas order
+    order = {aid: i for i, aid in enumerate(agent_ids)}
+    agents.sort(key=lambda a: order.get(a.id, 999))
+    return agents
+
+
+def _deduplicate_agents(agents: list[Agent]) -> list[Agent]:
+    """Safety guard: drop agents whose name has already been seen."""
+    seen: set[str] = set()
+    unique: list[Agent] = []
+    for agent in agents:
+        if agent.name not in seen:
+            seen.add(agent.name)
+            unique.append(agent)
+        else:
+            logger.warning("Duplicate agent name '%s' (id=%s) — skipped.", agent.name, agent.id)
+    return unique
+
+
 def _split_agents(agents: list[Agent]) -> tuple[dict | None, list[dict]]:
     """
-    Split agents into orchestrator and specialists.
-    The orchestrator is identified by:
+    Split agents into orchestrator + specialists.
+    Orchestrator is identified by:
       1. role containing 'orchestrator' (case-insensitive), OR
       2. channels containing 'telegram', OR
-      3. first agent in the list as fallback
-    All other agents are specialists.
+      3. first agent in the list as fallback.
     """
     orchestrator = None
     specialists = []
 
     for agent in agents:
-        channels = json.loads(agent.channels) if isinstance(agent.channels, str) else agent.channels
-        role_lower = agent.role.lower()
+        channels = json.loads(agent.channels) if isinstance(agent.channels, str) else (agent.channels or [])
+        role_lower = (agent.role or "").lower()
         if "orchestrator" in role_lower or "telegram" in channels:
             if orchestrator is None:
                 orchestrator = _agent_to_dict(agent)
@@ -73,15 +98,30 @@ async def run_workflow(
     db: AsyncSession,
     run_id: int,
     user_input: str,
+    agent_ids: list[int] | None = None,
 ) -> WorkflowState:
     """
-    Main entry point for running a multi-agent workflow.
-    Falls back to demo graph if fewer than 2 agents exist in DB.
+    Main entry point.
+
+    Parameters
+    ----------
+    agent_ids : list[int] | None
+        When provided (Model B / canvas run), only these agents are used.
+        When None (Telegram / legacy), all active agents are loaded.
     """
-    agents = await _load_active_agents(db)
+    if agent_ids is not None:
+        raw_agents = await _load_agents_by_ids(db, agent_ids)
+        if not raw_agents:
+            logger.warning("No active agents found for the provided agent_ids — falling back.")
+            raw_agents = await _load_active_agents(db)
+    else:
+        raw_agents = await _load_active_agents(db)
+
+    # Always deduplicate — safety net regardless of path
+    agents = _deduplicate_agents(raw_agents)
 
     if len(agents) < 2:
-        logger.warning("Fewer than 2 active agents found — falling back to demo graph")
+        logger.warning("Fewer than 2 active agents — falling back to demo graph.")
         from app.runtime.demo_graph import build_demo_graph
         graph = build_demo_graph()
         initial_state: WorkflowState = {
@@ -99,10 +139,7 @@ async def run_workflow(
     orchestrator, specialists = _split_agents(agents)
 
     if not specialists:
-        specialists = [_agent_to_dict(a) for a in agents if _agent_to_dict(a) != orchestrator]
-
-    if not specialists:
-        logger.error("No specialist agents available")
+        logger.error("No specialist agents available.")
         return {
             "user_input": user_input, "current_step": "error",
             "research_notes": "", "final_response": "No specialist agents configured.",
@@ -143,41 +180,28 @@ async def run_workflow(
         "type": "log",
     })
 
-    # Publish tool calls if any
+    # Publish tool calls
     for tc in result.get("tool_calls", []):
         msg = f"Tool called: {tc['tool']}({tc['input']}) → {tc['result'][:200]}"
-        await add_message(
-            db, run_id, result.get("routing_decision", "agent"),
-            msg, receiver=None, message_type="tool_call",
-        )
-        await publish({
-            "run_id": run_id,
-            "sender": result.get("routing_decision", "agent"),
-            "receiver": None,
-            "content": msg,
-            "type": "tool_call",
-        })
+        await add_message(db, run_id, result.get("routing_decision", "agent"),
+                          msg, receiver=None, message_type="tool_call")
+        await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
+                       "receiver": None, "content": msg, "type": "tool_call"})
 
     # Publish final output
-    await add_message(
-        db, run_id, result.get("routing_decision", "agent"),
-        result["final_response"], receiver="user", message_type="output",
-    )
-    await publish({
-        "run_id": run_id,
-        "sender": result.get("routing_decision", "agent"),
-        "receiver": "user",
-        "content": result["final_response"],
-        "type": "output",
-    })
+    await add_message(db, run_id, result.get("routing_decision", "agent"),
+                      result["final_response"], receiver="user", message_type="output")
+    await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
+                   "receiver": "user", "content": result["final_response"], "type": "output"})
 
     return result
 
 
-# Keep backward-compat alias used by old callers
+# Backward-compat alias
 async def run_demo_workflow(
     db: AsyncSession,
     run_id: int,
     user_input: str,
+    agent_ids: list[int] | None = None,
 ) -> WorkflowState:
-    return await run_workflow(db, run_id, user_input)
+    return await run_workflow(db, run_id, user_input, agent_ids=agent_ids)

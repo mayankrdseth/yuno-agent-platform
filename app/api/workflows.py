@@ -26,8 +26,19 @@ async def execute_demo_workflow(
     payload: WorkflowRunRequest,
     db: AsyncSession = Depends(get_db_session),
 ):
+    if payload.agent_ids is not None and len(payload.agent_ids) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least 2 agents to the workflow canvas before running.",
+        )
+
     run = await create_run(db, "demo-workflow", payload.user_input)
-    result = await run_demo_workflow(db, run.id, payload.user_input)
+    result = await run_demo_workflow(
+        db,
+        run.id,
+        payload.user_input,
+        agent_ids=payload.agent_ids,
+    )
 
     run = await db.get(WorkflowRun, run.id)
     if not run:
