@@ -3,11 +3,13 @@ from app.api.agents import router as agents_router
 from app.api.health import router as health_router
 from app.api.monitor import router as monitor_router
 from app.api.telegram import router as telegram_router
+from app.api.workflow_templates import router as workflow_templates_router
 from app.api.workflows import router as workflows_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
 api_router.include_router(agents_router)
 api_router.include_router(workflows_router)
+api_router.include_router(workflow_templates_router)
 api_router.include_router(monitor_router)
 api_router.include_router(telegram_router)
