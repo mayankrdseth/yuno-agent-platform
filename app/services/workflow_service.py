@@ -4,6 +4,8 @@ Workflow service.
 Model B: the canvas is the workflow definition.
 - When agent_ids is provided (from frontend canvas), only those agents are loaded.
 - When agent_ids is None (e.g. Telegram), all active agents are loaded as fallback.
+
+Orchestrator detection: exact match on role == "orchestrator" (Literal enum).
 """
 from __future__ import annotations
 
@@ -33,7 +35,6 @@ def _agent_to_dict(agent: Agent) -> dict:
         "channels": json.loads(agent.channels) if isinstance(agent.channels, str) else (agent.channels or []),
         "max_iterations": agent.max_iterations,
         "memory_enabled": agent.memory_enabled,
-        # Guardrail fields
         "forbidden_topics": json.loads(agent.forbidden_topics) if isinstance(agent.forbidden_topics, str) else (agent.forbidden_topics or []),
         "max_output_chars": agent.max_output_chars,
     }
@@ -67,28 +68,25 @@ def _deduplicate_agents(agents: list[Agent]) -> list[Agent]:
 
 
 def _split_agents(agents: list[Agent]) -> tuple[dict | None, list[dict]]:
+    """
+    Split agents into orchestrator + specialists.
+    Uses exact role == "orchestrator" match (Literal enum — no string search needed).
+    Falls back to first agent if none has orchestrator role.
+    """
     orchestrator = None
     specialists = []
 
     for agent in agents:
-        role_lower = (agent.role or "").lower()
-        if "orchestrator" in role_lower:
-            if orchestrator is None:
-                orchestrator = _agent_to_dict(agent)
-                continue
-        specialists.append(_agent_to_dict(agent))
-
-    if orchestrator is None:
-        remaining = list(agents)
-        for agent in remaining:
-            name_lower = (agent.name or "").lower()
-            if "orchestrator" in name_lower:
-                orchestrator = _agent_to_dict(agent)
-                specialists = [_agent_to_dict(a) for a in remaining if a.id != agent.id]
-                break
+        if agent.role == "orchestrator" and orchestrator is None:
+            orchestrator = _agent_to_dict(agent)
+        else:
+            specialists.append(_agent_to_dict(agent))
 
     if orchestrator is None and agents:
-        logger.warning("No orchestrator found — using first agent '%s' as fallback.", agents[0].name)
+        logger.warning(
+            "No orchestrator role found — using first agent '%s' as fallback.",
+            agents[0].name,
+        )
         orchestrator = _agent_to_dict(agents[0])
         specialists = [_agent_to_dict(a) for a in agents[1:]]
 
@@ -160,7 +158,6 @@ async def run_workflow(
 
     result = await graph.ainvoke(initial_state)
 
-    # Publish routing decision
     await add_message(
         db, run_id, orchestrator["name"],
         f"Routing to {result.get('routing_decision', '?')} — {result.get('routing_reason', '')}",
@@ -174,7 +171,6 @@ async def run_workflow(
         "type": "log",
     })
 
-    # Publish tool calls
     for tc in result.get("tool_calls", []):
         msg = f"Tool called: {tc['tool']}({tc['input']}) → {tc['result'][:200]}"
         await add_message(db, run_id, result.get("routing_decision", "agent"),
@@ -182,13 +178,9 @@ async def run_workflow(
         await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
                        "receiver": None, "content": msg, "type": "tool_call"})
 
-    # Token summary message
     usage = result.get("token_usage") or {}
     total_tok = usage.get("total_tokens", 0)
-    cost = _estimate_cost(
-        orchestrator.get("model", ""),
-        usage,
-    )
+    cost = _estimate_cost(orchestrator.get("model", ""), usage)
     token_msg = (
         f"Tokens used: {total_tok} "
         f"(prompt={usage.get('prompt_tokens',0)}, completion={usage.get('completion_tokens',0)}) "
@@ -198,7 +190,6 @@ async def run_workflow(
     await publish({"run_id": run_id, "sender": "system", "receiver": None,
                    "content": token_msg, "type": "log"})
 
-    # Publish final output
     await add_message(db, run_id, result.get("routing_decision", "agent"),
                       result["final_response"], receiver="user", message_type="output")
     await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
