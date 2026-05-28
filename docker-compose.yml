@@ -1,8 +1,19 @@
 # docker-compose.yml
+#
 # Usage:
-#   1. cp .env.example .env  and fill in GROQ_API_KEY (+ TELEGRAM_BOT_TOKEN if needed)
+#   1. Make sure .env exists (copy from .env.example and fill in GROQ_API_KEY)
 #   2. docker compose up --build
 #
+# NO manual database commands needed.
+# The backend runs `init_db()` at startup which:
+#   ─ Creates all tables via SQLAlchemy (SQLite, no migrations tool needed)
+#   ─ Seeds the 6 built-in agents and 2 workflow templates if not already present
+#
+# To wipe and reseed from scratch:
+#   docker compose down -v   (← the -v flag removes the yuno-db volume)
+#   docker compose up --build
+#
+# Ports:
 #   Frontend  →  http://localhost:5173
 #   Backend   →  http://localhost:8000
 #   API docs  →  http://localhost:8000/docs
