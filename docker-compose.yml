@@ -1,0 +1,53 @@
+# docker-compose.yml
+# Usage:
+#   1. cp .env.example .env  and fill in GROQ_API_KEY (+ TELEGRAM_BOT_TOKEN if needed)
+#   2. docker compose up --build
+#
+#   Frontend  →  http://localhost:5173
+#   Backend   →  http://localhost:8000
+#   API docs  →  http://localhost:8000/docs
+
+services:
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: yuno-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # SQLite file lives in the mounted volume
+      DATABASE_URL: sqlite+aiosqlite:////data/yuno.db
+    volumes:
+      # Persist the SQLite database between restarts / rebuilds
+      - yuno-db:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # Tells Vite where to find the API at build time.
+        # Change if backend is behind a reverse proxy or a different host.
+        VITE_API_BASE: http://localhost:8000
+    container_name: yuno-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  yuno-db:
+    driver: local
