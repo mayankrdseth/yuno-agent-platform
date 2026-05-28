@@ -16,6 +16,13 @@ const API_BASE = "http://127.0.0.1:8000";
 
 const AVAILABLE_TOOLS = ["web_search", "wikipedia", "calculator", "datetime"];
 const AVAILABLE_CHANNELS = ["telegram", "slack", "whatsapp"];
+const AVAILABLE_MODELS = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "mixtral-8x7b-32768",
+  "gemma2-9b-it",
+  "llama-3.1-70b-specdec",
+];
 
 /* ─────────────────────────────────────────
    Custom Node
@@ -25,18 +32,23 @@ function CustomAgentNode({ data }) {
   const channels = data.channels || [];
   const visibleTools = tools.slice(0, 3);
   const extraTools = tools.length - visibleTools.length;
+  const isOrchestrator = (data.role || "").toLowerCase().includes("orchestrator");
 
   return (
     <div style={{
       background: "#1a1f2e",
-      border: data.pending ? "2px dashed #1affd5" : "1px solid #2d3348",
+      border: isOrchestrator ? "2px solid #1affd5" : data.pending ? "2px dashed #1affd5" : "1px solid #2d3348",
       borderRadius: 10, padding: "10px 14px",
       minWidth: 180, maxWidth: 220,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.4)", cursor: "grab",
+      boxShadow: isOrchestrator ? "0 0 18px #1affd530" : "0 4px 16px rgba(0,0,0,0.4)",
+      cursor: "grab",
     }}>
       <Handle type="target" position={Position.Left}
         style={{ background: "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }} />
 
+      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+        {isOrchestrator && <span style={{ fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCHESTRATOR</span>}
+      </div>
       <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>{data.name}</div>
       <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{data.role}</div>
 
@@ -73,22 +85,52 @@ function parseList(val) {
   try { return JSON.parse(val || "[]"); } catch { return []; }
 }
 
-function buildAgentNode(agent, index, total) {
-  const cols = Math.min(total, 4);
+function buildAgentNode(agent, position) {
   return {
     id: String(agent.id),
     type: "agentNode",
-    position: { x: 80 + (index % cols) * 280, y: 60 + Math.floor(index / cols) * 220 },
+    position,
     data: { name: agent.name, role: agent.role, tools: parseList(agent.tools), channels: parseList(agent.channels), pending: false },
   };
 }
 
-function buildEdgesFromAgents(agents) {
-  return agents.slice(0, -1).map((agent, i) => ({
-    id: `e${agent.id}-${agents[i + 1].id}`,
-    source: String(agent.id), target: String(agents[i + 1].id),
+/**
+ * Hub topology: Orchestrator at left-center, specialists fanned out to the right.
+ * Falls back to linear chain if no orchestrator is found.
+ */
+function buildHubLayout(agents) {
+  if (!agents.length) return { nodes: [], edges: [] };
+
+  const orch = agents.find((a) => (a.role || "").toLowerCase().includes("orchestrator"))
+    || agents.find((a) => (a.name || "").toLowerCase().includes("orchestrator"));
+
+  if (!orch) {
+    // Fallback: linear chain
+    const nodes = agents.map((a, i) => buildAgentNode(a, { x: 80 + i * 280, y: 160 }));
+    const edges = agents.slice(0, -1).map((a, i) => ({
+      id: `e${a.id}-${agents[i + 1].id}`,
+      source: String(a.id), target: String(agents[i + 1].id),
+      animated: true, style: { stroke: "#1affd5", strokeWidth: 2 },
+    }));
+    return { nodes, edges };
+  }
+
+  const specialists = agents.filter((a) => a.id !== orch.id);
+  const totalSpec = specialists.length;
+  const centerY = totalSpec <= 1 ? 160 : 60 + ((totalSpec - 1) * 160) / 2;
+
+  const nodes = [
+    buildAgentNode(orch, { x: 80, y: centerY }),
+    ...specialists.map((a, i) => buildAgentNode(a, { x: 420, y: 60 + i * 160 })),
+  ];
+
+  const edges = specialists.map((a) => ({
+    id: `e${orch.id}-${a.id}`,
+    source: String(orch.id), target: String(a.id),
     animated: true, style: { stroke: "#1affd5", strokeWidth: 2 },
   }));
+
+  return { nodes, edges };
 }
 
 function MessageTypeTag({ type }) {
@@ -112,6 +154,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [runError, setRunError] = useState("");
 
+  // Workflow templates
+  const [templates, setTemplates] = useState([]);
+  const [templateName, setTemplateName] = useState("");
+  const [templateDesc, setTemplateDesc] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [templateMsg, setTemplateMsg] = useState("");
+
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
@@ -132,8 +181,10 @@ export default function App() {
     const res = await axios.get(`${API_BASE}/agents`);
     const fetched = res.data;
     setAgents(fetched);
-    setNodes(fetched.map((a, i) => buildAgentNode(a, i, fetched.length)));
-    setEdges(buildEdgesFromAgents(fetched));
+    const { nodes: n, edges: e } = buildHubLayout(fetched);
+    setNodes(n);
+    setEdges(e);
+    return fetched; // return for template loading
   }
 
   async function loadRuns() {
@@ -147,6 +198,11 @@ export default function App() {
     setSelectedRunId(runId);
   }
 
+  async function loadTemplates() {
+    const res = await axios.get(`${API_BASE}/workflow-templates`);
+    setTemplates(res.data);
+  }
+
   // ── Agent CRUD ──
   async function createAgent(e) {
     e.preventDefault();
@@ -158,7 +214,6 @@ export default function App() {
   async function deleteAgent(agentId) {
     if (!window.confirm("Delete this agent from the database permanently?")) return;
     await axios.delete(`${API_BASE}/agents/${agentId}`);
-    // Also remove from canvas if present
     const id = String(agentId);
     setNodes((nds) => nds.filter((n) => n.id !== id));
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
@@ -176,10 +231,13 @@ export default function App() {
   // ── Workflow builder ──
   function addAgentToWorkflow(agent) {
     if (nodes.find((n) => n.id === String(agent.id))) return;
-    const lastNode = nodes[nodes.length - 1];
+    // Find orchestrator node position to place new specialist to its right
+    const orchNode = nodes.find((n) => (n.data.role || "").toLowerCase().includes("orchestrator"));
+    const x = orchNode ? orchNode.position.x + 340 : 420;
+    const y = 60 + nodes.filter((n) => n.id !== (orchNode?.id)).length * 160;
     setNodes((nds) => [...nds, {
       id: String(agent.id), type: "agentNode",
-      position: { x: lastNode ? lastNode.position.x + 300 : 80, y: lastNode ? lastNode.position.y + 60 : 100 },
+      position: { x, y },
       data: { name: agent.name, role: agent.role, tools: parseList(agent.tools), channels: parseList(agent.channels), pending: true },
     }]);
   }
@@ -195,23 +253,99 @@ export default function App() {
     setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: "#1affd5", strokeWidth: 2 } }, eds));
   }, [setEdges, setNodes]);
 
-  // ── Run workflow (Model B: send canvas state) ──
+  // ── Save current canvas as workflow template ──
+  async function saveTemplate() {
+    if (!templateName.trim()) { setTemplateMsg("Please enter a workflow name."); return; }
+    if (nodes.length < 2) { setTemplateMsg("Add at least 2 agents to the canvas before saving."); return; }
+    setSavingTemplate(true);
+    setTemplateMsg("");
+    try {
+      const agent_ids = nodes.map((n) => parseInt(n.id, 10));
+      const edgesPayload = edges.map((e) => ({ source: e.source, target: e.target }));
+      await axios.post(`${API_BASE}/workflow-templates`, {
+        name: templateName.trim(),
+        description: templateDesc.trim() || null,
+        agent_ids,
+        edges: edgesPayload,
+      });
+      setTemplateMsg(`✓ Saved "${templateName.trim()}"`);
+      setTemplateName("");
+      setTemplateDesc("");
+      await loadTemplates();
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setTemplateMsg(detail || "Failed to save template.");
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  // ── Load a saved template onto the canvas ──
+  async function loadTemplate(tpl) {
+    // tpl.agent_ids may be integers (user-saved) or strings/names (built-in)
+    const currentAgents = agents.length ? agents : await loadAgents();
+
+    let resolvedIds;
+    if (tpl.is_builtin) {
+      // Built-in templates store agent names — resolve to IDs
+      const nameToId = Object.fromEntries(currentAgents.map((a) => [a.name.toLowerCase(), a.id]));
+      resolvedIds = tpl.agent_ids
+        .map((nameOrId) => {
+          if (typeof nameOrId === "number") return nameOrId;
+          return nameToId[String(nameOrId).toLowerCase()] ?? null;
+        })
+        .filter(Boolean);
+    } else {
+      resolvedIds = tpl.agent_ids;
+    }
+
+    if (!resolvedIds.length) {
+      alert("No matching agents found for this template. Create the agents first.");
+      return;
+    }
+
+    const tplAgents = resolvedIds
+      .map((id) => currentAgents.find((a) => a.id === id))
+      .filter(Boolean);
+
+    // Rebuild nodes with hub layout
+    const { nodes: n, edges: e } = buildHubLayout(tplAgents);
+
+    // Override edges with template-defined edges if present (user-drawn topology)
+    if (!tpl.is_builtin && tpl.edges && tpl.edges.length > 0) {
+      const idSet = new Set(n.map((nd) => nd.id));
+      const tplEdges = tpl.edges
+        .filter((ed) => idSet.has(String(ed.source)) && idSet.has(String(ed.target)))
+        .map((ed) => ({
+          id: `e${ed.source}-${ed.target}`,
+          source: String(ed.source), target: String(ed.target),
+          animated: true, style: { stroke: "#1affd5", strokeWidth: 2 },
+        }));
+      setNodes(n);
+      setEdges(tplEdges.length ? tplEdges : e);
+    } else {
+      setNodes(n);
+      setEdges(e);
+    }
+  }
+
+  async function deleteTemplate(id) {
+    if (!window.confirm("Delete this workflow template?")) return;
+    await axios.delete(`${API_BASE}/workflow-templates/${id}`);
+    await loadTemplates();
+  }
+
+  // ── Run workflow ──
   async function runWorkflow() {
     setRunError("");
-
-    // Guard: need at least 2 agents on canvas
     if (nodes.length < 2) {
       setRunError("Add at least 2 agents to the workflow canvas before running.");
       return;
     }
-
     setLoading(true);
     try {
-      // Extract integer IDs from canvas nodes (node.id is a string like "3")
       const agent_ids = nodes.map((n) => parseInt(n.id, 10));
-      // Send edges so backend knows the connection topology
       const edgePayload = edges.map((e) => ({ source: e.source, target: e.target }));
-
       await axios.post(`${API_BASE}/workflows/demo-run`, {
         user_input: workflowInput,
         agent_ids,
@@ -226,7 +360,7 @@ export default function App() {
     }
   }
 
-  useEffect(() => { loadAgents(); loadRuns(); }, []);
+  useEffect(() => { loadAgents(); loadRuns(); loadTemplates(); }, []);
 
   useEffect(() => {
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/monitor");
@@ -255,7 +389,15 @@ export default function App() {
             <input placeholder="Agent name" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} required />
             <input placeholder="Role (e.g. Orchestrator, Research Specialist)" value={agentForm.role} onChange={(e) => setAgentForm({ ...agentForm, role: e.target.value })} required />
             <textarea placeholder="System prompt" rows="4" value={agentForm.system_prompt} onChange={(e) => setAgentForm({ ...agentForm, system_prompt: e.target.value })} required />
-            <input placeholder="Model" value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} />
+
+            {/* Model dropdown */}
+            <div>
+              <div className="muted-small" style={{ marginBottom: 4 }}>Model</div>
+              <select value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })}
+                style={{ width: "100%", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+                {AVAILABLE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
 
             <div>
               <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
@@ -303,7 +445,6 @@ export default function App() {
                       <div className="muted-small">{agent.role}</div>
                     </div>
                     <div style={{ display: "flex", gap: 5 }}>
-                      {/* Canvas toggle */}
                       {!inGraph ? (
                         <button onClick={() => addAgentToWorkflow(agent)} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
                           + Add
@@ -313,12 +454,8 @@ export default function App() {
                           − Remove
                         </button>
                       )}
-                      {/* Delete from DB */}
-                      <button
-                        onClick={() => deleteAgent(agent.id)}
-                        title="Delete from database"
-                        style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}
-                      >
+                      <button onClick={() => deleteAgent(agent.id)} title="Delete from database"
+                        style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
                         🗑
                       </button>
                     </div>
@@ -373,22 +510,78 @@ export default function App() {
             </div>
           </div>
 
-          {/* ── Run Workflow ── */}
-          <div className="panel">
-            <div className="eyebrow">Execution</div>
-            <h2>Run Workflow</h2>
-            <div className="muted-small" style={{ marginBottom: 8, fontSize: 11 }}>
-              Runs only the {nodes.length} agent{nodes.length !== 1 ? "s" : ""} currently on the canvas.
-            </div>
-            <textarea rows="6" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
-            {runError && (
-              <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>
-                ⚠ {runError}
+          {/* ── Right column: Run + Templates ── */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+            {/* Run Workflow */}
+            <div className="panel">
+              <div className="eyebrow">Execution</div>
+              <h2>Run Workflow</h2>
+              <div className="muted-small" style={{ marginBottom: 8, fontSize: 11 }}>
+                Runs only the {nodes.length} agent{nodes.length !== 1 ? "s" : ""} currently on the canvas.
               </div>
-            )}
-            <button className="primary-btn" onClick={runWorkflow} disabled={loading}>
-              {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
-            </button>
+              <textarea rows="4" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
+              {runError && (
+                <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>
+                  ⚠ {runError}
+                </div>
+              )}
+              <button className="primary-btn" onClick={runWorkflow} disabled={loading}>
+                {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
+              </button>
+            </div>
+
+            {/* Workflow Templates */}
+            <div className="panel">
+              <div className="eyebrow">Templates</div>
+              <h2>Workflow Templates</h2>
+
+              {/* Load a template */}
+              <div style={{ marginBottom: 12 }}>
+                <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Load onto canvas</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {templates.map((tpl) => (
+                    <div key={tpl.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f1117", borderRadius: 6, padding: "7px 10px", border: "1px solid #2d3348" }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6 }}>
+                          {tpl.name}
+                          {tpl.is_builtin === 1 && <span style={{ fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
+                        </div>
+                        {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>{tpl.description}</div>}
+                      </div>
+                      <div style={{ display: "flex", gap: 5 }}>
+                        <button onClick={() => loadTemplate(tpl)}
+                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
+                          Load
+                        </button>
+                        {tpl.is_builtin !== 1 && (
+                          <button onClick={() => deleteTemplate(tpl.id)}
+                            style={{ fontSize: 11, padding: "3px 7px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
+                            🗑
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {templates.length === 0 && <div className="muted-small" style={{ fontSize: 11 }}>No templates yet.</div>}
+                </div>
+              </div>
+
+              {/* Save current canvas */}
+              <div style={{ borderTop: "1px solid #2d3348", paddingTop: 10 }}>
+                <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Save current canvas as template</div>
+                <input placeholder="Workflow name" value={templateName} onChange={(e) => setTemplateName(e.target.value)}
+                  style={{ width: "100%", marginBottom: 6 }} />
+                <input placeholder="Description (optional)" value={templateDesc} onChange={(e) => setTemplateDesc(e.target.value)}
+                  style={{ width: "100%", marginBottom: 8 }} />
+                {templateMsg && (
+                  <div style={{ fontSize: 11, marginBottom: 6, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171" }}>{templateMsg}</div>
+                )}
+                <button className="primary-btn" onClick={saveTemplate} disabled={savingTemplate} style={{ fontSize: 12, padding: "7px 14px" }}>
+                  {savingTemplate ? "Saving..." : "Save as template"}
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
