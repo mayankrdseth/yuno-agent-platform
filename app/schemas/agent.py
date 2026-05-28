@@ -12,6 +12,9 @@ class AgentBase(BaseModel):
     max_iterations: int = 5
     memory_enabled: bool = True
     schedule: str | None = None
+    # Guardrails
+    forbidden_topics: list[str] = []
+    max_output_chars: int | None = None
 
 
 class AgentCreate(AgentBase):
@@ -29,6 +32,8 @@ class AgentUpdate(BaseModel):
     max_iterations: int | None = None
     memory_enabled: bool | None = None
     schedule: str | None = None
+    forbidden_topics: list[str] | None = None
+    max_output_chars: int | None = None
 
 
 class AgentRead(AgentBase):

@@ -10,8 +10,6 @@ class WorkflowEdge(BaseModel):
 
 class WorkflowRunRequest(BaseModel):
     user_input: str = Field(min_length=1)
-    # IDs of agents currently on the canvas (Model B).
-    # When None (e.g. Telegram), falls back to all active agents.
     agent_ids: list[int] | None = None
     edges: list[WorkflowEdge] | None = None
 
@@ -31,6 +29,11 @@ class WorkflowRunSummary(BaseModel):
     output_text: str | None
     created_at: str
     completed_at: str | None
+    # Token + cost fields (None for older runs before this feature)
+    total_tokens: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
 class WorkflowMessageRead(BaseModel):

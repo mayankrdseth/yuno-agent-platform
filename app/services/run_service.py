@@ -40,10 +40,26 @@ async def add_message(
     return message
 
 
-async def complete_run(db: AsyncSession, run: WorkflowRun, output_text: str) -> WorkflowRun:
+async def complete_run(
+    db: AsyncSession,
+    run: WorkflowRun,
+    output_text: str,
+    total_tokens: int | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    estimated_cost_usd: float | None = None,
+) -> WorkflowRun:
     run.status = "completed"
     run.output_text = output_text
     run.completed_at = datetime.now(timezone.utc)
+    if total_tokens is not None:
+        run.total_tokens = total_tokens
+    if prompt_tokens is not None:
+        run.prompt_tokens = prompt_tokens
+    if completion_tokens is not None:
+        run.completion_tokens = completion_tokens
+    if estimated_cost_usd is not None:
+        run.estimated_cost_usd = estimated_cost_usd
     await db.commit()
     await db.refresh(run)
     return run

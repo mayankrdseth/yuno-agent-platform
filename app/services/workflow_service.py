@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.broadcast import publish
 from app.models.agent import Agent
-from app.runtime.agent_graph import build_agent_graph
+from app.runtime.agent_graph import _estimate_cost, build_agent_graph
 from app.runtime.state import WorkflowState
 from app.services.run_service import add_message
 
@@ -33,29 +33,28 @@ def _agent_to_dict(agent: Agent) -> dict:
         "channels": json.loads(agent.channels) if isinstance(agent.channels, str) else (agent.channels or []),
         "max_iterations": agent.max_iterations,
         "memory_enabled": agent.memory_enabled,
+        # Guardrail fields
+        "forbidden_topics": json.loads(agent.forbidden_topics) if isinstance(agent.forbidden_topics, str) else (agent.forbidden_topics or []),
+        "max_output_chars": agent.max_output_chars,
     }
 
 
 async def _load_active_agents(db: AsyncSession) -> list[Agent]:
-    """Fallback: load all active agents (used by Telegram / callers without a canvas)."""
     result = await db.execute(select(Agent).where(Agent.is_active == True))  # noqa: E712
     return list(result.scalars().all())
 
 
 async def _load_agents_by_ids(db: AsyncSession, agent_ids: list[int]) -> list[Agent]:
-    """Model B: load only the agents the user placed on the canvas."""
     result = await db.execute(
         select(Agent).where(Agent.id.in_(agent_ids), Agent.is_active == True)  # noqa: E712
     )
     agents = list(result.scalars().all())
-    # Preserve canvas order
     order = {aid: i for i, aid in enumerate(agent_ids)}
     agents.sort(key=lambda a: order.get(a.id, 999))
     return agents
 
 
 def _deduplicate_agents(agents: list[Agent]) -> list[Agent]:
-    """Safety guard: drop agents whose name has already been seen."""
     seen: set[str] = set()
     unique: list[Agent] = []
     for agent in agents:
@@ -68,18 +67,9 @@ def _deduplicate_agents(agents: list[Agent]) -> list[Agent]:
 
 
 def _split_agents(agents: list[Agent]) -> tuple[dict | None, list[dict]]:
-    """
-    Split agents into orchestrator + specialists.
-
-    Orchestrator detection priority (NO channel-based detection):
-      1. role contains 'orchestrator' (case-insensitive)
-      2. name contains 'orchestrator' (case-insensitive)
-      3. first agent in the list as final fallback
-    """
     orchestrator = None
     specialists = []
 
-    # Pass 1: find by role
     for agent in agents:
         role_lower = (agent.role or "").lower()
         if "orchestrator" in role_lower:
@@ -88,7 +78,6 @@ def _split_agents(agents: list[Agent]) -> tuple[dict | None, list[dict]]:
                 continue
         specialists.append(_agent_to_dict(agent))
 
-    # Pass 2: if still not found, find by name
     if orchestrator is None:
         remaining = list(agents)
         for agent in remaining:
@@ -98,9 +87,8 @@ def _split_agents(agents: list[Agent]) -> tuple[dict | None, list[dict]]:
                 specialists = [_agent_to_dict(a) for a in remaining if a.id != agent.id]
                 break
 
-    # Pass 3: hard fallback — first agent
     if orchestrator is None and agents:
-        logger.warning("No orchestrator found by role or name — using first agent '%s' as fallback.", agents[0].name)
+        logger.warning("No orchestrator found — using first agent '%s' as fallback.", agents[0].name)
         orchestrator = _agent_to_dict(agents[0])
         specialists = [_agent_to_dict(a) for a in agents[1:]]
 
@@ -113,15 +101,6 @@ async def run_workflow(
     user_input: str,
     agent_ids: list[int] | None = None,
 ) -> WorkflowState:
-    """
-    Main entry point.
-
-    Parameters
-    ----------
-    agent_ids : list[int] | None
-        When provided (Model B / canvas run), only these agents are used.
-        When None (Telegram / legacy), all active agents are loaded.
-    """
     if agent_ids is not None:
         raw_agents = await _load_agents_by_ids(db, agent_ids)
         if not raw_agents:
@@ -130,7 +109,6 @@ async def run_workflow(
     else:
         raw_agents = await _load_active_agents(db)
 
-    # Always deduplicate
     agents = _deduplicate_agents(raw_agents)
 
     if len(agents) < 2:
@@ -146,6 +124,7 @@ async def run_workflow(
             "routing_decision": "",
             "routing_reason": "",
             "tool_calls": [],
+            "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
         return await graph.ainvoke(initial_state)
 
@@ -156,10 +135,11 @@ async def run_workflow(
         return {
             "user_input": user_input, "current_step": "error",
             "research_notes": "", "final_response": "No specialist agents configured.",
-            "status": "failed", "routing_decision": "", "routing_reason": "", "tool_calls": [],
+            "status": "failed", "routing_decision": "", "routing_reason": "",
+            "tool_calls": [],
+            "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 
-    # Publish input event
     await add_message(db, run_id, "user", user_input, receiver=orchestrator["name"], message_type="input")
     await publish({"run_id": run_id, "sender": "user", "receiver": orchestrator["name"],
                    "content": user_input, "type": "input"})
@@ -175,6 +155,7 @@ async def run_workflow(
         "routing_decision": "",
         "routing_reason": "",
         "tool_calls": [],
+        "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
     result = await graph.ainvoke(initial_state)
@@ -201,6 +182,22 @@ async def run_workflow(
         await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
                        "receiver": None, "content": msg, "type": "tool_call"})
 
+    # Token summary message
+    usage = result.get("token_usage") or {}
+    total_tok = usage.get("total_tokens", 0)
+    cost = _estimate_cost(
+        orchestrator.get("model", ""),
+        usage,
+    )
+    token_msg = (
+        f"Tokens used: {total_tok} "
+        f"(prompt={usage.get('prompt_tokens',0)}, completion={usage.get('completion_tokens',0)}) "
+        f"| Estimated cost: ${cost:.6f}"
+    )
+    await add_message(db, run_id, "system", token_msg, receiver=None, message_type="log")
+    await publish({"run_id": run_id, "sender": "system", "receiver": None,
+                   "content": token_msg, "type": "log"})
+
     # Publish final output
     await add_message(db, run_id, result.get("routing_decision", "agent"),
                       result["final_response"], receiver="user", message_type="output")
@@ -210,7 +207,6 @@ async def run_workflow(
     return result
 
 
-# Backward-compat alias
 async def run_demo_workflow(
     db: AsyncSession,
     run_id: int,

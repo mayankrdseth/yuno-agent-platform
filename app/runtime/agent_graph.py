@@ -11,8 +11,15 @@ Architecture
       ↓  (agent runs, optionally calls tools)
   response back to caller
 
-The graph is built dynamically at runtime using agent config from the database.
-Every routing decision is made by the LLM, not hard-coded rules.
+Guardrails
+----------
+  - forbidden_topics : list[str] — if any topic keyword appears in the output,
+    the response is replaced with a refusal message.
+  - max_output_chars  : int | None — output is hard-truncated at this limit.
+
+Token tracking
+--------------
+  usage_metadata from every LLM call is accumulated into state["token_usage"].
 """
 from __future__ import annotations
 
@@ -25,10 +32,76 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.runtime.llm import get_llm
-from app.runtime.state import WorkflowState
+from app.runtime.state import TokenUsage, WorkflowState
 from app.runtime.tools import format_tools_for_prompt, get_tools_for_agent
 
 logger = logging.getLogger(__name__)
+
+# Groq cost per 1k tokens (USD) — approximate, update as needed
+_COST_PER_1K = {
+    "llama-3.3-70b-versatile": (0.00059, 0.00079),
+    "llama-3.1-8b-instant": (0.00005, 0.00008),
+    "mixtral-8x7b-32768": (0.00024, 0.00024),
+    "gemma2-9b-it": (0.00020, 0.00020),
+    "llama-3.1-70b-specdec": (0.00059, 0.00099),
+}
+_DEFAULT_COST = (0.00020, 0.00020)
+
+
+def _extract_usage(response) -> dict:
+    """Pull token counts from a LangChain LLM response safely."""
+    meta = getattr(response, "usage_metadata", None) or {}
+    return {
+        "prompt_tokens": meta.get("input_tokens", 0),
+        "completion_tokens": meta.get("output_tokens", 0),
+        "total_tokens": meta.get("total_tokens", 0),
+    }
+
+
+def _accumulate_usage(existing: dict, new: dict) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=existing.get("prompt_tokens", 0) + new.get("prompt_tokens", 0),
+        completion_tokens=existing.get("completion_tokens", 0) + new.get("completion_tokens", 0),
+        total_tokens=existing.get("total_tokens", 0) + new.get("total_tokens", 0),
+    )
+
+
+def _estimate_cost(model: str, usage: dict) -> float:
+    in_cost, out_cost = _COST_PER_1K.get(model, _DEFAULT_COST)
+    return (
+        usage.get("prompt_tokens", 0) / 1000 * in_cost
+        + usage.get("completion_tokens", 0) / 1000 * out_cost
+    )
+
+
+def _apply_guardrails(
+    text: str,
+    forbidden_topics: list[str],
+    max_output_chars: int | None,
+    agent_name: str,
+) -> str:
+    """Enforce output guardrails: forbidden topic blocking + length cap."""
+    # 1. Forbidden topic check (case-insensitive keyword match)
+    if forbidden_topics:
+        text_lower = text.lower()
+        for topic in forbidden_topics:
+            if topic.strip().lower() in text_lower:
+                logger.warning(
+                    "[%s] guardrail blocked output — forbidden topic '%s' detected.",
+                    agent_name, topic,
+                )
+                return (
+                    f"[Guardrail] I\'m not able to provide information on \"{topic}\" "
+                    "as it falls outside my permitted scope."
+                )
+    # 2. Output length cap
+    if max_output_chars and len(text) > max_output_chars:
+        logger.info(
+            "[%s] output truncated from %d to %d chars (max_output_chars guardrail).",
+            agent_name, len(text), max_output_chars,
+        )
+        text = text[:max_output_chars] + " … [truncated]"
+    return text
 
 
 async def run_agent_with_tools(
@@ -36,10 +109,14 @@ async def run_agent_with_tools(
     user_message: str,
     tool_names: list[str],
     agent_name: str,
-) -> tuple[str, list[dict]]:
-    llm = get_llm()
+    forbidden_topics: list[str] | None = None,
+    max_output_chars: int | None = None,
+    model: str = "",
+) -> tuple[str, list[dict], TokenUsage]:
+    llm = get_llm(model) if model else get_llm()
     tool_calls_log: list[dict] = []
     tools = get_tools_for_agent(tool_names)
+    usage_acc: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     tool_section = ""
     if tools:
@@ -57,6 +134,7 @@ async def run_agent_with_tools(
     ]
 
     response = await llm.ainvoke(messages)
+    usage_acc = _accumulate_usage(usage_acc, _extract_usage(response))
     reply = response.content.strip()
 
     if tools and reply.startswith("{"):
@@ -76,19 +154,29 @@ async def run_agent_with_tools(
                     SystemMessage(content=f"Tool result from {tool_name}:\n{tool_result}\nNow provide your final answer."),
                 ]
                 final_response = await llm.ainvoke(followup)
+                usage_acc = _accumulate_usage(usage_acc, _extract_usage(final_response))
                 reply = final_response.content.strip()
         except (json.JSONDecodeError, KeyError):
             pass
 
-    return reply, tool_calls_log
+    # Apply guardrails
+    reply = _apply_guardrails(
+        reply,
+        forbidden_topics=forbidden_topics or [],
+        max_output_chars=max_output_chars,
+        agent_name=agent_name,
+    )
+
+    return reply, tool_calls_log, TokenUsage(**usage_acc)
 
 
 async def llm_route(
     user_input: str,
     orchestrator_system_prompt: str,
     specialist_agents: list[dict],
-) -> dict[str, Any]:
-    llm = get_llm()
+    model: str = "",
+) -> tuple[dict[str, Any], TokenUsage]:
+    llm = get_llm(model) if model else get_llm()
 
     agent_list = "\n".join(
         f"  - {a['name']}: {a['role']} — {a['system_prompt'][:120]}"
@@ -105,18 +193,19 @@ async def llm_route(
     )
 
     response = await llm.ainvoke(routing_prompt)
+    usage = _extract_usage(response)
     reply = response.content.strip()
 
     json_match = re.search(r'\{.*?\}', reply, re.DOTALL)
     if json_match:
         try:
             data = json.loads(json_match.group())
-            return data
+            return data, TokenUsage(**usage)
         except json.JSONDecodeError:
             pass
 
     fallback = specialist_agents[0]["name"] if specialist_agents else "fallback"
-    return {"target": fallback, "reason": "routing fallback"}
+    return {"target": fallback, "reason": "routing fallback"}, TokenUsage(**usage)
 
 
 def build_agent_graph(
@@ -131,7 +220,6 @@ def build_agent_graph(
     if not specialists:
         raise ValueError("At least one specialist agent is required.")
 
-    # Deduplicate specialists by name (safety net — service layer should already do this)
     seen: set[str] = set()
     unique_specialists: list[dict] = []
     for s in specialists:
@@ -141,8 +229,6 @@ def build_agent_graph(
         else:
             logger.warning("Duplicate specialist '%s' dropped in graph builder.", s["name"])
     specialists = unique_specialists
-
-    # Also guard: orchestrator name must not clash with any specialist name
     specialists = [s for s in specialists if s["name"] != orchestrator["name"]]
 
     specialist_map = {a["name"]: a for a in specialists}
@@ -150,13 +236,17 @@ def build_agent_graph(
     async def orchestrator_node(state: WorkflowState) -> WorkflowState:
         state["current_step"] = "orchestrator"
         state["status"] = "running"
-        route = await llm_route(
+        route, usage = await llm_route(
             user_input=state["user_input"],
             orchestrator_system_prompt=orchestrator["system_prompt"],
             specialist_agents=specialists,
+            model=orchestrator.get("model", ""),
         )
         state["routing_decision"] = route.get("target", specialists[0]["name"])
         state["routing_reason"] = route.get("reason", "")
+        # Accumulate tokens
+        existing = state.get("token_usage") or {}
+        state["token_usage"] = _accumulate_usage(existing, usage)
         logger.info("Orchestrator routed to: %s (%s)", state["routing_decision"], state["routing_reason"])
         return state
 
@@ -172,17 +262,32 @@ def build_agent_graph(
             tool_names = agent_config.get("tools", [])
             state["current_step"] = name
 
-            response, tool_calls = await run_agent_with_tools(
+            # Parse guardrail fields (stored as JSON strings in DB, dicts in memory)
+            forbidden = agent_config.get("forbidden_topics", [])
+            if isinstance(forbidden, str):
+                try:
+                    forbidden = json.loads(forbidden)
+                except json.JSONDecodeError:
+                    forbidden = []
+            max_chars = agent_config.get("max_output_chars")
+
+            response, tool_calls, usage = await run_agent_with_tools(
                 system_prompt=agent_config["system_prompt"],
                 user_message=state["user_input"],
                 tool_names=tool_names,
                 agent_name=name,
+                forbidden_topics=forbidden,
+                max_output_chars=max_chars,
+                model=agent_config.get("model", ""),
             )
 
             state["research_notes"] = response
             state["tool_calls"] = tool_calls
             state["final_response"] = response
             state["status"] = "completed"
+            # Accumulate tokens
+            existing = state.get("token_usage") or {}
+            state["token_usage"] = _accumulate_usage(existing, usage)
             return state
 
         specialist_node.__name__ = agent_config["name"]

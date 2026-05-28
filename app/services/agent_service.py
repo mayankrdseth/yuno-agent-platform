@@ -28,6 +28,8 @@ async def create_agent(db: AsyncSession, payload: AgentCreate) -> Agent:
         max_iterations=payload.max_iterations,
         memory_enabled=payload.memory_enabled,
         schedule=payload.schedule,
+        forbidden_topics=json.dumps(payload.forbidden_topics),
+        max_output_chars=payload.max_output_chars,
     )
     db.add(agent)
     await db.commit()
@@ -39,7 +41,7 @@ async def update_agent(db: AsyncSession, agent: Agent, payload: AgentUpdate) -> 
     update_data = payload.model_dump(exclude_unset=True)
 
     for field, value in update_data.items():
-        if field in {"tools", "channels"} and value is not None:
+        if field in {"tools", "channels", "forbidden_topics"} and value is not None:
             setattr(agent, field, json.dumps(value))
         else:
             setattr(agent, field, value)

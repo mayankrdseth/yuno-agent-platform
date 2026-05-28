@@ -10,6 +10,7 @@ from app.schemas.workflow_template import WorkflowTemplateCreate
 from app.services.workflow_template_service import (
     create_template,
     delete_template,
+    get_template,
     list_templates,
     serialize_template,
 )
@@ -32,6 +33,14 @@ async def post_template(payload: WorkflowTemplateCreate, db: DbSession):
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_template(template_id: int, db: DbSession):
+    tpl = await get_template(db, template_id)
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if tpl.is_builtin:
+        raise HTTPException(
+            status_code=403,
+            detail="Built-in templates cannot be deleted.",
+        )
     deleted = await delete_template(db, template_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Template not found")

@@ -20,6 +20,10 @@ class Agent(Base):
     memory_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     schedule: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    # Guardrails
+    forbidden_topics: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    max_output_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

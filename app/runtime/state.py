@@ -1,5 +1,10 @@
-from typing import Any
-from typing_extensions import TypedDict
+from typing import TypedDict
+
+
+class TokenUsage(TypedDict):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
 
 
 class WorkflowState(TypedDict):
@@ -8,8 +13,7 @@ class WorkflowState(TypedDict):
     research_notes: str
     final_response: str
     status: str
-    # LLM routing
     routing_decision: str
     routing_reason: str
-    # Tool execution log
-    tool_calls: list[dict[str, Any]]
+    tool_calls: list[dict]
+    token_usage: TokenUsage
