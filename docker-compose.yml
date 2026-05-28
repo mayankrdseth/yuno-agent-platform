@@ -6,17 +6,17 @@
 #
 # NO manual database commands needed.
 # The backend runs `init_db()` at startup which:
-#   ─ Creates all tables via SQLAlchemy (SQLite, no migrations tool needed)
-#   ─ Seeds the 6 built-in agents and 2 workflow templates if not already present
+#   - Creates all tables via SQLAlchemy (SQLite, no migrations tool needed)
+#   - Seeds the 6 built-in agents and 2 workflow templates if not already present
 #
 # To wipe and reseed from scratch:
-#   docker compose down -v   (← the -v flag removes the yuno-db volume)
+#   docker compose down -v   (<- the -v flag removes the yuno-db volume)
 #   docker compose up --build
 #
 # Ports:
-#   Frontend  →  http://localhost:5173
-#   Backend   →  http://localhost:8000
-#   API docs  →  http://localhost:8000/docs
+#   Frontend  ->  http://localhost:5173
+#   Backend   ->  http://localhost:8000
+#   API docs  ->  http://localhost:8000/docs
 
 services:
 
@@ -31,13 +31,12 @@ services:
     env_file:
       - .env
     environment:
-      # SQLite file lives in the mounted volume
       DATABASE_URL: sqlite+aiosqlite:////data/yuno.db
     volumes:
-      # Persist the SQLite database between restarts / rebuilds
       - yuno-db:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # python:slim has wget but not curl
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -48,8 +47,6 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        # Tells Vite where to find the API at build time.
-        # Change if backend is behind a reverse proxy or a different host.
         VITE_API_BASE: http://localhost:8000
     container_name: yuno-frontend
     restart: unless-stopped
