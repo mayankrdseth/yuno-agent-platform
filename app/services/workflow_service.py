@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import asdict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +24,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.broadcast import publish
 from app.models.agent import Agent
 from app.runtime.agent_graph import _estimate_cost, build_agent_graph
-from app.runtime.state import WorkflowState
+from app.runtime.state import TokenUsage, WorkflowState
 from app.services.run_service import add_message
 
 logger = logging.getLogger(__name__)
+
+
+def _usage_as_dict(obj) -> dict:
+    """Safely convert TokenUsage dataclass, dict, or None to a plain dict."""
+    if obj is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if isinstance(obj, TokenUsage):
+        return asdict(obj)
+    return obj  # already a dict
 
 
 def _agent_to_dict(agent: Agent) -> dict:
@@ -237,12 +247,13 @@ async def run_workflow(
         await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
                        "receiver": None, "content": msg, "type": "tool_call"})
 
-    usage = result.get("token_usage") or {}
+    # Normalise token_usage regardless of whether it's a TokenUsage dataclass or dict
+    usage = _usage_as_dict(result.get("token_usage"))
     total_tok = usage.get("total_tokens", 0)
     cost = _estimate_cost(orchestrator.get("model", ""), usage)
     token_msg = (
         f"Tokens used: {total_tok} "
-        f"(prompt={usage.get('prompt_tokens',0)}, completion={usage.get('completion_tokens',0)}) "
+        f"(prompt={usage.get('prompt_tokens', 0)}, completion={usage.get('completion_tokens', 0)}) "
         f"| Estimated cost: ${cost:.6f}"
     )
     await add_message(db, run_id, "system", token_msg, receiver=None, message_type="log")
