@@ -24,8 +24,115 @@ A full-stack multi-agent orchestration platform. Create agents, wire them into w
 | Workflow runtime | LangGraph `StateGraph` |
 | LLM provider | Groq API (`langchain-groq`) |
 | Frontend | React 19, Vite 8, ReactFlow 11, Axios |
+| Frontend serving | nginx (production Docker build) |
 | Messaging | python-telegram-bot (webhook mode) |
 | Testing | pytest + pytest-asyncio (backend), Vitest + Testing Library (frontend) |
+
+---
+
+## Quick Start (Docker — Recommended)
+
+### 1. Clone
+
+```bash
+git clone https://github.com/mayankrdseth/yuno-agent-platform.git
+cd yuno-agent-platform
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in your keys:
+
+```env
+APP_NAME=Yuno Agent Platform
+APP_ENV=dev
+DEBUG=true
+
+DATABASE_URL=sqlite+aiosqlite:///./yuno.db
+
+GROQ_API_KEY=your_groq_api_key
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_WEBHOOK_SECRET=your_webhook_secret
+```
+
+Get a free Groq API key at [console.groq.com](https://console.groq.com).
+
+### 3. Build and run
+
+```bash
+docker compose up --build
+```
+
+That's it. No manual database setup needed — `init_db()` runs at backend startup, creates all tables, and seeds the built-in agents and templates.
+
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| API docs (Swagger) | http://localhost:8000/docs |
+
+### Wipe and reseed from scratch
+
+```bash
+docker compose down -v   # -v removes the yuno-db volume
+docker compose up --build
+```
+
+---
+
+## Docker Architecture
+
+The stack runs as two containers orchestrated by `docker-compose.yml`:
+
+```
+┌─────────────────────────────────────┐
+│  yuno-frontend  (nginx:1.27-alpine) │
+│  port 5173:80                       │
+│  Vite build → static files          │
+│  SPA fallback via nginx.conf        │
+└────────────────┬────────────────────┘
+                 │  depends_on (healthy)
+┌────────────────▼────────────────────┐
+│  yuno-backend  (python:3.11-slim)   │
+│  port 8000:8000                     │
+│  uvicorn app.main:app               │
+│  SQLite stored in yuno-db volume    │
+└─────────────────────────────────────┘
+```
+
+- **`Dockerfile.backend`** — installs Python deps, copies `app/`, mounts SQLite at `/data/yuno.db` via a named volume
+- **`Dockerfile.frontend`** — two-stage build: Node 20 builds the Vite app (with `VITE_API_BASE` baked in at build time), then nginx serves the static output
+- **`nginx.conf`** — serves static assets with long-cache headers, SPA fallback for all routes
+- The backend has a healthcheck (`GET /health`) — the frontend container waits for it before starting
+
+---
+
+## Manual Setup (Local Development)
+
+Use this if you want hot-reload on both frontend and backend simultaneously.
+
+### Backend
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+# → http://127.0.0.1:8000
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+# → http://localhost:5173
+```
 
 ---
 
@@ -66,23 +173,8 @@ User input (UI or Telegram)
 | `runtime/tools.py` | Tool registry: `datetime`, `calculator`, `web_search` (DuckDuckGo), `wikipedia` |
 | `runtime/llm.py` | `get_llm(model)` — returns a `ChatGroq` instance |
 | `runtime/state.py` | `WorkflowState` TypedDict and `TokenUsage` dataclass |
-| `runtime/demo_graph.py` | Legacy hardcoded demo graph (kept for reference) |
 | `db/init_db.py` | Creates tables, seeds 5 built-in agents + 2 built-in templates (idempotent) |
 | `core/broadcast.py` | Async pub/sub queue for WebSocket monitor events |
-| `models/agent.py` | `Agent` SQLAlchemy model (name, role, system_prompt, model, tools, channels, guardrails) |
-| `models/workflow_run.py` | `WorkflowRun` model (status, input/output, token usage, cost) |
-| `models/workflow_message.py` | Per-message log (sender, receiver, type, content) |
-| `models/workflow_template.py` | `WorkflowTemplate` model (agent_ids, edges JSON, is_builtin flag) |
-
-### Frontend (`frontend/src/`)
-
-All UI logic lives in `App.jsx` (single-file app). Sections:
-
-- **Agents tab** — list, create, and delete agents; shows model, tools, guardrail config
-- **Workflow canvas tab** — ReactFlow canvas; drag agents to build a workflow; run it with a prompt
-- **Run history tab** — paginated list of past runs with status, tokens, and cost
-- **Message log** — per-run message thread (orchestrator ↔ specialist exchange)
-- **Live monitor** — WebSocket-connected event feed
 
 ### Built-in Templates (seeded at startup)
 
@@ -150,83 +242,19 @@ yuno-agent-platform/
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx
-│   │   ├── App.css
 │   │   ├── App.test.jsx
-│   │   ├── index.css
-│   │   ├── main.jsx
-│   │   └── setupTests.js
+│   │   └── ...
 │   ├── package.json
 │   └── vite.config.js
 ├── tests/
 │   └── test_api.py
-├── pytest.ini
-└── README.md
-```
-
----
-
-## Setup
-
-### 1. Clone
-
-```bash
-git clone https://github.com/mayankrdseth/yuno-agent-platform.git
-cd yuno-agent-platform
-```
-
-### 2. Backend
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Environment variables
-
-Create `.env` in the project root:
-
-```env
-APP_NAME=Yuno Agent Platform
-APP_ENV=dev
-DEBUG=true
-
-DATABASE_URL=sqlite+aiosqlite:///./yuno.db
-
-GROQ_API_KEY=your_groq_api_key
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-TELEGRAM_WEBHOOK_SECRET=your_webhook_secret
-```
-
-Get a free Groq API key at [console.groq.com](https://console.groq.com).
-
-### 4. Frontend
-
-```bash
-cd frontend
-npm install
-```
-
----
-
-## Running
-
-### Backend
-
-```bash
-uvicorn app.main:app --reload
-# → http://127.0.0.1:8000
-# → API docs at http://127.0.0.1:8000/docs
-```
-
-The first startup auto-creates the SQLite database and seeds the two built-in templates and five built-in agents.
-
-### Frontend
-
-```bash
-cd frontend
-npm run dev
-# → http://localhost:5173
+├── Dockerfile.backend
+├── Dockerfile.frontend
+├── docker-compose.yml
+├── nginx.conf
+├── .env.example
+├── requirements.txt
+└── pytest.ini
 ```
 
 ---
@@ -263,8 +291,8 @@ npm run dev
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/` | Root / health check |
-| `GET` | `/health` | Health endpoint |
+| `GET` | `/` | Root endpoint |
+| `GET` | `/health` | Health check (used by Docker healthcheck) |
 | `WS` | `/ws/monitor` | WebSocket live event stream |
 | `POST` | `/telegram/webhook` | Telegram webhook receiver |
 
@@ -278,8 +306,6 @@ npm run dev
 python -m pytest tests/test_api.py -v
 ```
 
-Covers: root endpoint, agent creation, agent listing, run listing, and run-not-found error.
-
 ### Frontend
 
 ```bash
@@ -289,27 +315,22 @@ npm run test:run
 
 ---
 
+## Token Usage & Cost Tracking
+
+Every workflow run records `prompt_tokens`, `completion_tokens`, `total_tokens`, and `estimated_cost_usd` — calculated per model using Groq's approximate rates:
+
+| Model | Input (per 1k) | Output (per 1k) |
+|---|---|---|
+| `llama-3.3-70b-versatile` | $0.00059 | $0.00079 |
+| `llama-3.1-8b-instant` | $0.00005 | $0.00008 |
+| `mixtral-8x7b-32768` | $0.00024 | $0.00024 |
+| `gemma2-9b-it` | $0.00020 | $0.00020 |
+
+---
+
 ## Telegram Bot Flow
 
 1. Set your bot webhook to point at `POST /telegram/webhook`
 2. Send a message — greetings are handled inline; task prompts trigger a full workflow run
 3. The bot replies with the final response from the specialist agent
 4. The run is persisted and visible in the dashboard run history
-
----
-
-## Token Usage & Cost Tracking
-
-Every workflow run records:
-
-- `prompt_tokens`, `completion_tokens`, `total_tokens`
-- `estimated_cost_usd` — calculated per model using hardcoded Groq rates
-
-Supported model cost table (approximate, USD per 1k tokens):
-
-| Model | Input | Output |
-|---|---|---|
-| `llama-3.3-70b-versatile` | $0.00059 | $0.00079 |
-| `llama-3.1-8b-instant` | $0.00005 | $0.00008 |
-| `mixtral-8x7b-32768` | $0.00024 | $0.00024 |
-| `gemma2-9b-it` | $0.00020 | $0.00020 |
