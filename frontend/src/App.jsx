@@ -25,7 +25,7 @@ const AVAILABLE_MODELS = [
 ];
 
 /* ───────────────────────────────────────────
-   Custom Node — orchestrator gets amber ring, agent is default
+   Custom Node
 ─────────────────────────────────────────── */
 function CustomAgentNode({ data }) {
   const tools = data.tools || [];
@@ -44,27 +44,18 @@ function CustomAgentNode({ data }) {
       padding: "10px 14px",
       minWidth: 180,
       maxWidth: 220,
-      boxShadow: isOrchestrator
-        ? "0 0 10px rgba(245,158,11,0.15)"
-        : "0 4px 16px rgba(0,0,0,0.4)",
+      boxShadow: isOrchestrator ? "0 0 10px rgba(245,158,11,0.15)" : "0 4px 16px rgba(0,0,0,0.4)",
       cursor: "grab",
     }}>
       <Handle type="target" position={Position.Left}
         style={{ background: isOrchestrator ? "#f59e0b" : "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }} />
-
       <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
         {isOrchestrator && (
-          <span style={{
-            fontSize: 9, background: "#f59e0b18", color: "#f59e0b",
-            border: "1px solid #f59e0b35", borderRadius: 3,
-            padding: "1px 5px", fontWeight: 700, letterSpacing: "0.04em",
-          }}>ORCHESTRATOR</span>
+          <span style={{ fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700, letterSpacing: "0.04em" }}>ORCHESTRATOR</span>
         )}
       </div>
-
       <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>{data.name}</div>
       <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{data.role}</div>
-
       {visibleTools.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
           {visibleTools.map((t) => (
@@ -73,7 +64,6 @@ function CustomAgentNode({ data }) {
           {extraTools > 0 && <span style={{ fontSize: 10, color: "#6b7280" }}>+{extraTools} more</span>}
         </div>
       )}
-
       {channels.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
           {channels.map((c) => (
@@ -81,7 +71,6 @@ function CustomAgentNode({ data }) {
           ))}
         </div>
       )}
-
       <Handle type="source" position={Position.Right}
         style={{ background: isOrchestrator ? "#f59e0b" : "#1affd5", width: 10, height: 10, border: "2px solid #0f1117" }} />
     </div>
@@ -89,6 +78,190 @@ function CustomAgentNode({ data }) {
 }
 
 const nodeTypes = { agentNode: CustomAgentNode };
+
+/* ───────────────────────────────────────────
+   Edit Agent Modal
+─────────────────────────────────────────── */
+function EditAgentModal({ agent, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: agent.name,
+    role: agent.role,
+    system_prompt: agent.system_prompt || "",
+    model: agent.model || "llama-3.3-70b-versatile",
+    tools: parseList(agent.tools),
+    channels: parseList(agent.channels),
+    max_iterations: agent.max_iterations ?? 5,
+    memory_enabled: agent.memory_enabled ?? true,
+    is_active: agent.is_active ?? true,
+    forbidden_topics: Array.isArray(agent.forbidden_topics)
+      ? agent.forbidden_topics.join(", ")
+      : (agent.forbidden_topics || ""),
+    max_output_chars: agent.max_output_chars ?? "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const isOrch = form.role === "orchestrator";
+
+  function toggleTool(tool) {
+    setForm((f) => ({ ...f, tools: f.tools.includes(tool) ? f.tools.filter((t) => t !== tool) : [...f.tools, tool] }));
+  }
+  function toggleChannel(ch) {
+    setForm((f) => ({ ...f, channels: f.channels.includes(ch) ? f.channels.filter((c) => c !== ch) : [...f.channels, ch] }));
+  }
+
+  async function handleSave() {
+    setSaving(true); setError("");
+    try {
+      const payload = {
+        ...form,
+        forbidden_topics: form.forbidden_topics
+          ? form.forbidden_topics.split(",").map((s) => s.trim()).filter(Boolean)
+          : [],
+        max_output_chars: form.max_output_chars ? parseInt(form.max_output_chars, 10) : null,
+        channels: isOrch ? form.channels : [],
+      };
+      await axios.patch(`${API_BASE}/agents/${agent.id}`, payload);
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err?.response?.data?.detail || "Failed to save changes.");
+    } finally { setSaving(false); }
+  }
+
+  // Close on backdrop click
+  function handleBackdrop(e) { if (e.target === e.currentTarget) onClose(); }
+
+  return (
+    <div onClick={handleBackdrop} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 1000, backdropFilter: "blur(4px)",
+    }}>
+      <div style={{
+        background: "#1a1f2e", border: "1px solid #2d3348", borderRadius: 12,
+        padding: 24, width: "min(560px, 95vw)", maxHeight: "90vh",
+        overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 10, color: "#1affd5", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>Edit Agent</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: "#e8e8e8" }}>{agent.name}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#6b7280", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "2px 6px" }}>✕</button>
+        </div>
+
+        <div className="form-grid">
+          {/* Name */}
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>Name</div>
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </div>
+
+          {/* Role */}
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>Role</div>
+            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, channels: [] })}
+              style={{ width: "100%", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+              <option value="agent">Agent</option>
+              <option value="orchestrator">Orchestrator</option>
+            </select>
+          </div>
+
+          {/* System Prompt */}
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>System Prompt</div>
+            <textarea rows={5} value={form.system_prompt}
+              onChange={(e) => setForm({ ...form, system_prompt: e.target.value })}
+              style={{ resize: "vertical" }} />
+          </div>
+
+          {/* Model */}
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>Model</div>
+            <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
+              style={{ width: "100%", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+              {AVAILABLE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+
+          {/* Tools */}
+          <div>
+            <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {AVAILABLE_TOOLS.map((tool) => (
+                <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={form.tools.includes(tool)} onChange={() => toggleTool(tool)} />
+                  {tool}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Channels — orchestrator only */}
+          {isOrch && (
+            <div>
+              <div className="muted-small" style={{ marginBottom: 6 }}>Channels <span style={{ color: "#f59e0b", fontSize: 10 }}>(orchestrator only)</span></div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {AVAILABLE_CHANNELS.map((ch) => (
+                  <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.channels.includes(ch)} onChange={() => toggleChannel(ch)} />
+                    {ch}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Guardrails */}
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>Forbidden Topics <span style={{ color: "#6b7280", fontSize: 10 }}>(comma-separated)</span></div>
+            <input value={form.forbidden_topics} onChange={(e) => setForm({ ...form, forbidden_topics: e.target.value })} placeholder="e.g. violence, politics" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div>
+              <div className="muted-small" style={{ marginBottom: 4 }}>Max Iterations</div>
+              <input type="number" min={1} max={20} value={form.max_iterations}
+                onChange={(e) => setForm({ ...form, max_iterations: Number(e.target.value) })} />
+            </div>
+            <div>
+              <div className="muted-small" style={{ marginBottom: 4 }}>Max Output Chars</div>
+              <input type="number" value={form.max_output_chars}
+                onChange={(e) => setForm({ ...form, max_output_chars: e.target.value })} placeholder="optional" />
+            </div>
+          </div>
+
+          {/* Toggles */}
+          <div style={{ display: "flex", gap: 16 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
+              Active
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.memory_enabled} onChange={(e) => setForm({ ...form, memory_enabled: e.target.checked })} />
+              Memory enabled
+            </label>
+          </div>
+        </div>
+
+        {error && (
+          <div style={{ color: "#f87171", fontSize: 12, marginTop: 12, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {error}</div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+          <button onClick={onClose}
+            style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer", fontSize: 13 }}>
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving} className="primary-btn" style={{ padding: "8px 20px", fontSize: 13 }}>
+            {saving ? "Saving..." : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ───────────────────────────────────────────
    Helpers
@@ -109,43 +282,33 @@ function buildAgentNode(agent, position) {
 
 function buildHubLayout(agents) {
   if (!agents.length) return { nodes: [], edges: [] };
-
   const orch = agents.find((a) => a.role === "orchestrator");
-
   if (!orch) {
     const nodes = agents.map((a, i) => buildAgentNode(a, { x: 80 + i * 280, y: 160 }));
     const edges = agents.slice(0, -1).map((a, i) => ({
-      id: `e${a.id}-${agents[i + 1].id}`,
-      source: String(a.id), target: String(agents[i + 1].id),
+      id: `e${a.id}-${agents[i + 1].id}`, source: String(a.id), target: String(agents[i + 1].id),
       animated: true, style: { stroke: "#1affd5", strokeWidth: 2 },
     }));
     return { nodes, edges };
   }
-
   const specialists = agents.filter((a) => a.id !== orch.id);
   const totalSpec = specialists.length;
   const centerY = totalSpec <= 1 ? 160 : 60 + ((totalSpec - 1) * 160) / 2;
-
   const nodes = [
     buildAgentNode(orch, { x: 80, y: centerY }),
     ...specialists.map((a, i) => buildAgentNode(a, { x: 420, y: 60 + i * 160 })),
   ];
-
   const edges = specialists.map((a) => ({
-    id: `e${orch.id}-${a.id}`,
-    source: String(orch.id), target: String(a.id),
+    id: `e${orch.id}-${a.id}`, source: String(orch.id), target: String(a.id),
     animated: true, style: { stroke: "#f59e0b80", strokeWidth: 1.5, strokeDasharray: "5 3" },
   }));
-
   return { nodes, edges };
 }
 
 function MessageTypeTag({ type }) {
   const colours = { input: "#0ea5e9", output: "#22c55e", log: "#6b7280", agent_message: "#8b5cf6", tool_call: "#f59e0b" };
   return (
-    <span style={{ background: colours[type] || "#6b7280", color: "#fff", borderRadius: 4, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>
-      {type}
-    </span>
+    <span style={{ background: colours[type] || "#6b7280", color: "#fff", borderRadius: 4, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>{type}</span>
   );
 }
 
@@ -160,6 +323,7 @@ export default function App() {
   const [liveEvents, setLiveEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [runError, setRunError] = useState("");
+  const [editingAgent, setEditingAgent] = useState(null); // agent object being edited
 
   const [templates, setTemplates] = useState([]);
   const [activeTemplateId, setActiveTemplateId] = useState(null);
@@ -191,7 +355,6 @@ export default function App() {
     const res = await axios.get(`${API_BASE}/agents`);
     const fetched = res.data;
     setAgents(fetched);
-    // NOTE: Do NOT auto-populate canvas here — templates handle canvas state
     return fetched;
   }
 
@@ -211,11 +374,20 @@ export default function App() {
     const data = res.data;
     setTemplates(data);
     if (!data.length) return;
-
-    // Auto-load: prefer last selected (stored in sessionStorage), fallback to first
     const lastId = sessionStorage.getItem("lastTemplateId");
     const toLoad = (lastId && data.find((t) => String(t.id) === lastId)) ?? data[0];
     if (toLoad) await loadTemplate(toLoad, data);
+  }
+
+  // ── After an agent edit: refresh list + refresh canvas nodes in-place ──
+  async function handleAgentSaved() {
+    const fetched = await loadAgents();
+    // Update canvas node data if that agent is on the canvas
+    setNodes((nds) => nds.map((n) => {
+      const updated = fetched.find((a) => String(a.id) === n.id);
+      if (!updated) return n;
+      return { ...n, data: { ...n.data, name: updated.name, role: updated.role, tools: parseList(updated.tools), channels: parseList(updated.channels) } };
+    }));
   }
 
   // ── Agent CRUD ──
@@ -228,7 +400,6 @@ export default function App() {
         ? agentForm.forbidden_topics.split(",").map((s) => s.trim()).filter(Boolean)
         : [],
       max_output_chars: agentForm.max_output_chars ? parseInt(agentForm.max_output_chars, 10) : null,
-      // clear channels if not orchestrator
       channels: isOrchestratorForm ? agentForm.channels : [],
     };
     await axios.post(`${API_BASE}/agents`, payload);
@@ -255,7 +426,6 @@ export default function App() {
   function toggleTool(tool) {
     setAgentForm((f) => ({ ...f, tools: f.tools.includes(tool) ? f.tools.filter((t) => t !== tool) : [...f.tools, tool] }));
   }
-
   function toggleChannel(ch) {
     setAgentForm((f) => ({ ...f, channels: f.channels.includes(ch) ? f.channels.filter((c) => c !== ch) : [...f.channels, ch] }));
   }
@@ -303,7 +473,6 @@ export default function App() {
     } finally { setSavingTemplate(false); }
   }
 
-  // agentOverride lets loadTemplates() pass already-fetched agents to avoid a race condition
   async function loadTemplate(tpl, agentOverride) {
     const currentAgents = agentOverride ?? (agents.length ? agents : await loadAgents());
     let resolvedIds;
@@ -327,7 +496,6 @@ export default function App() {
     } else {
       setNodes(n); setEdges(e);
     }
-    // Remember this selection for next page load
     setActiveTemplateId(tpl.id);
     sessionStorage.setItem("lastTemplateId", String(tpl.id));
   }
@@ -351,21 +519,13 @@ export default function App() {
   async function runWorkflow() {
     setRunError("");
     const hasOrch = nodes.some((n) => n.data.role === "orchestrator");
-    if (!hasOrch) {
-      setRunError("Add an Orchestrator agent to the canvas before running.");
-      return;
-    }
-    if (nodes.length < 2) {
-      setRunError("Add at least 2 agents (1 orchestrator + 1 specialist) to the canvas.");
-      return;
-    }
+    if (!hasOrch) { setRunError("Add an Orchestrator agent to the canvas before running."); return; }
+    if (nodes.length < 2) { setRunError("Add at least 2 agents (1 orchestrator + 1 specialist) to the canvas."); return; }
     setLoading(true);
     try {
       const agent_ids = nodes.map((n) => parseInt(n.id, 10));
       const edgePayload = edges.map((e) => ({ source: e.source, target: e.target }));
-      await axios.post(`${API_BASE}/workflows/demo-run`, {
-        user_input: workflowInput, agent_ids, edges: edgePayload,
-      });
+      await axios.post(`${API_BASE}/workflows/demo-run`, { user_input: workflowInput, agent_ids, edges: edgePayload });
       await loadRuns();
     } catch (err) {
       setRunError(err?.response?.data?.detail || "Workflow run failed. Check backend logs.");
@@ -387,6 +547,15 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {/* Edit Agent Modal */}
+      {editingAgent && (
+        <EditAgentModal
+          agent={editingAgent}
+          onClose={() => setEditingAgent(null)}
+          onSaved={handleAgentSaved}
+        />
+      )}
+
       <aside className="sidebar">
         <div>
           <div className="eyebrow">Yuno Challenge</div>
@@ -400,8 +569,6 @@ export default function App() {
           <form onSubmit={createAgent} className="form-grid">
             <input placeholder="Agent name" value={agentForm.name}
               onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} required />
-
-            {/* Role dropdown — only two values */}
             <div>
               <div className="muted-small" style={{ marginBottom: 4 }}>Role</div>
               <select value={agentForm.role}
@@ -411,11 +578,8 @@ export default function App() {
                 <option value="orchestrator">Orchestrator</option>
               </select>
             </div>
-
             <textarea placeholder="System prompt" rows="4" value={agentForm.system_prompt}
               onChange={(e) => setAgentForm({ ...agentForm, system_prompt: e.target.value })} required />
-
-            {/* Model */}
             <div>
               <div className="muted-small" style={{ marginBottom: 4 }}>Model</div>
               <select value={agentForm.model}
@@ -424,8 +588,6 @@ export default function App() {
                 {AVAILABLE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
-
-            {/* Tools */}
             <div>
               <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -437,8 +599,6 @@ export default function App() {
                 ))}
               </div>
             </div>
-
-            {/* Channels — only visible for orchestrator */}
             {isOrchestratorForm && (
               <div>
                 <div className="muted-small" style={{ marginBottom: 6 }}>Channels <span style={{ color: "#f59e0b", fontSize: 10 }}>(orchestrator only)</span></div>
@@ -452,13 +612,10 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            {/* Guardrails */}
             <input placeholder="Forbidden topics (comma-separated)" value={agentForm.forbidden_topics}
               onChange={(e) => setAgentForm({ ...agentForm, forbidden_topics: e.target.value })} />
             <input type="number" placeholder="Max output chars (optional)" value={agentForm.max_output_chars}
               onChange={(e) => setAgentForm({ ...agentForm, max_output_chars: e.target.value })} />
-
             <input type="number" min="1" max="20" placeholder="Max iterations"
               value={agentForm.max_iterations}
               onChange={(e) => setAgentForm({ ...agentForm, max_iterations: Number(e.target.value) })} />
@@ -485,9 +642,14 @@ export default function App() {
                           <span style={{ fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>
                         )}
                       </div>
-                      <div className="muted-small">{agent.role}</div>
+                      <div className="muted-small">{agent.role} · {agent.model?.split("-")[0] ?? ""}</div>
                     </div>
                     <div style={{ display: "flex", gap: 5 }}>
+                      {/* ✏ Edit button */}
+                      <button onClick={() => setEditingAgent(agent)} title="Edit agent"
+                        style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #1affd530", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
+                        ✏
+                      </button>
                       {!inGraph ? (
                         <button onClick={() => addAgentToWorkflow(agent)}
                           style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
@@ -571,9 +733,7 @@ export default function App() {
               </div>
               <textarea rows="4" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
               {runError && (
-                <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>
-                  ⚠ {runError}
-                </div>
+                <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {runError}</div>
               )}
               <button className="primary-btn" onClick={runWorkflow} disabled={loading}>
                 {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
@@ -702,8 +862,7 @@ export default function App() {
                   <div style={{ fontSize: 13 }}>{event.content}</div>
                 </div>
               ))}
-              {liveEvents.length === 0 && <div className="muted-small">Waiting for events...</div>}
-            </div>
+              {liveEvents.length === 0 && <div className="muted-small">Waiting for events...</div>}</div>
           </div>
         </section>
       </main>
