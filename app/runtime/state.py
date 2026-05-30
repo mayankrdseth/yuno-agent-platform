@@ -15,7 +15,8 @@ class WorkflowState(TypedDict):
     research_notes: str
     final_response: str
     status: str
-    routing_decision: str
+    routing_decision: str            # primary target (backwards compat, always set)
+    routing_targets: list[str]       # all target agent names (1 for single, N for compound queries)
     routing_reason: str
     tool_calls: list[dict]
     token_usage: Any
