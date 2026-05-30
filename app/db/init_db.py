@@ -1,7 +1,7 @@
 import json
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.db.base import Base
 from app.db.session import engine, AsyncSessionLocal
@@ -57,6 +57,8 @@ BUILTIN_AGENTS = [
         "memory_enabled": True,
         "forbidden_topics": [],
         "max_output_chars": None,
+        "skills": ["routing", "intent_detection"],
+        "interaction_rules": ["always respond in JSON when routing", "never answer user queries directly"],
     },
     {
         "name": "Researcher",
@@ -74,6 +76,8 @@ BUILTIN_AGENTS = [
         "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
+        "skills": ["web_search", "summarisation", "fact_checking"],
+        "interaction_rules": ["always cite sources when available", "structure answers with bullet points"],
     },
     {
         "name": "Mathematician",
@@ -91,6 +95,8 @@ BUILTIN_AGENTS = [
         "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
+        "skills": ["arithmetic", "unit_conversion", "date_calculations"],
+        "interaction_rules": ["always show step-by-step working", "use the calculator tool for all arithmetic"],
     },
     {
         "name": "SupportOrchestrator",
@@ -109,6 +115,8 @@ BUILTIN_AGENTS = [
         "memory_enabled": True,
         "forbidden_topics": [],
         "max_output_chars": None,
+        "skills": ["triage", "routing", "urgency_detection"],
+        "interaction_rules": ["always respond in JSON when routing", "classify urgency before routing"],
     },
     {
         "name": "Supporter",
@@ -126,6 +134,8 @@ BUILTIN_AGENTS = [
         "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
+        "skills": ["customer_support", "empathy", "communication"],
+        "interaction_rules": ["always acknowledge the user's concern first", "end responses with an offer to help further"],
     },
     {
         "name": "Escalator",
@@ -144,8 +154,33 @@ BUILTIN_AGENTS = [
         "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
+        "skills": ["escalation", "incident_reporting", "urgency_classification"],
+        "interaction_rules": ["always include a timestamp in escalation reports", "structure output as: summary / urgency / action / timestamp"],
     },
 ]
+
+# ─── Safe migration: add columns that may be missing in an existing DB ───────
+# Each entry: (column_name, DDL_type_and_default)
+_AGENT_MIGRATIONS = [
+    ("schedule",          "VARCHAR(120)"),
+    ("schedule_prompt",   "TEXT"),
+    ("skills",            "TEXT NOT NULL DEFAULT '[]'"),
+    ("interaction_rules", "TEXT NOT NULL DEFAULT '[]'"),
+]
+
+
+async def _migrate_agents_table() -> None:
+    """Add any missing columns to the agents table (safe for fresh + existing DBs)."""
+    async with engine.begin() as conn:
+        for col_name, col_def in _AGENT_MIGRATIONS:
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE agents ADD COLUMN {col_name} {col_def}")
+                )
+                logger.info("Migration: added column agents.%s", col_name)
+            except Exception:
+                # Column already exists — SQLite raises OperationalError; safe to ignore
+                pass
 
 
 async def _seed_builtin_agents() -> None:
@@ -166,6 +201,8 @@ async def _seed_builtin_agents() -> None:
                 memory_enabled=agent_def["memory_enabled"],
                 forbidden_topics=json.dumps(agent_def["forbidden_topics"]),
                 max_output_chars=agent_def["max_output_chars"],
+                skills=json.dumps(agent_def.get("skills", [])),
+                interaction_rules=json.dumps(agent_def.get("interaction_rules", [])),
             ))
             logger.info("Seeded agent: %s (%s)", agent_def["name"], agent_def["role"])
         await db.commit()
@@ -189,7 +226,13 @@ async def _seed_builtin_templates() -> None:
 
 
 async def init_db() -> None:
+    # 1. Create any brand-new tables (idempotent)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # 2. Migrate existing tables (add missing columns)
+    await _migrate_agents_table()
+
+    # 3. Seed built-in data
     await _seed_builtin_agents()
     await _seed_builtin_templates()
