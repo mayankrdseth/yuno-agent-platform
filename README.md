@@ -6,9 +6,10 @@ A full-stack multi-agent orchestration platform. Create agents, wire them into w
 
 ## What It Does
 
-- **Agent management** — create, edit, and delete agents with custom system prompts, models, tools, guardrails, and channel assignments
+- **Agent management** — create, edit, and delete agents with custom system prompts, models, tools, guardrails, skills, and interaction rules
 - **Visual workflow canvas** — drag agents onto a ReactFlow canvas and wire them up; the selected agent list is the live workflow definition
 - **LangGraph execution** — an orchestrator agent uses LLM-based routing to select a specialist agent; the specialist runs with optional tool calls
+- **Retry / feedback loop** — if a specialist returns an empty or guardrail-blocked response, the graph automatically routes back to the orchestrator (up to 2 retries), which re-routes to a different or better-instructed specialist
 - **Built-in templates** — two pre-seeded workflows (*Research Hub*, *Support Triage*) load on first startup
 - **Run history** — every workflow execution is persisted with full message logs, token usage, and estimated cost
 - **Live monitoring** — WebSocket stream (`/ws/monitor`) broadcasts real-time execution events to the dashboard
@@ -84,6 +85,71 @@ docker compose up --build
 
 ---
 
+## Telegram Webhook Setup (Local Development)
+
+Telegram webhooks require a publicly reachable HTTPS URL. The easiest way to get one locally is **ngrok**.
+
+### Step 1 — Install and run ngrok
+
+```bash
+# macOS
+brew install ngrok
+
+# Linux / Windows — download from https://ngrok.com/download
+```
+
+Start a tunnel pointing at the backend port:
+
+```bash
+ngrok http 8000
+```
+
+ngrok will print a forwarding URL like:
+
+```
+Forwarding  https://abc123.ngrok-free.app -> http://localhost:8000
+```
+
+### Step 2 — Register the webhook with Telegram
+
+Replace the placeholders and run:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://<YOUR_NGROK_SUBDOMAIN>.ngrok-free.app/telegram/webhook",
+    "secret_token": "<YOUR_WEBHOOK_SECRET>"
+  }'
+```
+
+A successful response looks like:
+
+```json
+{"ok": true, "result": true, "description": "Webhook was set"}
+```
+
+### Step 3 — Verify
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getWebhookInfo"
+```
+
+Check that `"url"` matches your ngrok address and `"last_error_message"` is absent.
+
+### Step 4 — Start the backend (if not already running)
+
+```bash
+uvicorn app.main:app --reload
+# or: docker compose up --build
+```
+
+Now send any message to your bot — it will trigger a full workflow run and reply.
+
+> **Note:** ngrok free-tier tunnels expire when you restart ngrok. Re-run the `setWebhook` curl command each time your ngrok URL changes. For a stable URL, use a paid ngrok plan or a free alternative like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
+
+---
+
 ## Docker Architecture
 
 The stack runs as two containers orchestrated by `docker-compose.yml`:
@@ -119,7 +185,7 @@ Use this if you want hot-reload on both frontend and backend simultaneously.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 # → http://127.0.0.1:8000
@@ -152,10 +218,15 @@ User input (UI or Telegram)
   (runs with tool calls if needed)
         │
         ▼
-  guardrails check (forbidden_topics, max_output_chars)
+  retry_check_node
+  (empty / guardrail-blocked response?)
         │
-        ▼
-  response + token usage persisted to DB
+        ├── needs_retry=True  ──▶  orchestrator_node  (re-routes, up to 2×)
+        │
+        └── needs_retry=False ──▶  guardrails check
+                                        │
+                                        ▼
+                              response + token usage persisted to DB
 ```
 
 ### Backend (`app/`)
@@ -169,12 +240,22 @@ User input (UI or Telegram)
 | `api/monitor.py` | WebSocket `/ws/monitor` — broadcasts run events via in-memory queue |
 | `api/telegram.py` | Telegram webhook receiver |
 | `api/health.py` | Health check endpoint |
-| `runtime/agent_graph.py` | LangGraph `StateGraph` — orchestrator + specialist nodes, guardrails, token tracking |
+| `runtime/agent_graph.py` | LangGraph `StateGraph` — orchestrator + specialist nodes, retry/feedback loop, guardrails, token tracking |
 | `runtime/tools.py` | Tool registry: `datetime`, `calculator`, `web_search` (DuckDuckGo), `wikipedia` |
 | `runtime/llm.py` | `get_llm(model)` — returns a `ChatGroq` instance |
 | `runtime/state.py` | `WorkflowState` TypedDict and `TokenUsage` dataclass |
 | `db/init_db.py` | Creates tables, seeds 5 built-in agents + 2 built-in templates (idempotent) |
 | `core/broadcast.py` | Async pub/sub queue for WebSocket monitor events |
+
+### Retry / Feedback Loop
+
+After each specialist run, `retry_check_node` evaluates the output:
+
+- **Empty response** → retry (re-route to a different specialist)
+- **Guardrail refusal** (`[Guardrail] ...` prefix) → retry
+- **Max retries reached** (2×) → pass through; if still empty, returns a graceful error
+
+On retry, the orchestrator receives the previous specialist's output as context so it can deliberately choose a *different* specialist — enabling sequential multi-agent handling of compound queries (e.g. *"What is 2+2 and who invented calculus?"* hits Mathematician first, then on retry Researcher handles the history part).
 
 ### Built-in Templates (seeded at startup)
 
@@ -192,12 +273,21 @@ User input (UI or Telegram)
 | `web_search` | DuckDuckGo Instant Answer API (no key required) |
 | `wikipedia` | Wikipedia REST API summary (~400 chars) |
 
-### Agent Guardrails
+### Agent Configuration
 
-Each agent supports two output-level guardrails configured at creation time:
-
-- **`forbidden_topics`** — list of keywords; if any appear in the output, the response is replaced with a refusal message
-- **`max_output_chars`** — hard character cap; output is truncated if exceeded
+| Field | Purpose |
+|---|---|
+| `system_prompt` | Core instructions for the agent |
+| `model` | Groq model to use |
+| `tools` | List of tool names the agent may call |
+| `channels` | Messaging channels (e.g. `telegram`) |
+| `skills` | Capability labels visible to the orchestrator for routing (e.g. `["summarisation", "code_review"]`) |
+| `interaction_rules` | Behavioural rules injected into the agent's prompt context (e.g. `["always reply in bullet points"]`) |
+| `forbidden_topics` | Guardrail: keywords that trigger a refusal response |
+| `max_output_chars` | Guardrail: hard character cap on output |
+| `memory_enabled` | Whether the orchestrator persists conversation turns for this session |
+| `max_iterations` | How many memory turns to inject as context |
+| `schedule` | Cron expression for scheduled runs (set via natural language) |
 
 ---
 
@@ -234,7 +324,9 @@ yuno-agent-platform/
 │   ├── schemas/
 │   ├── services/
 │   │   ├── agent_service.py
+│   │   ├── memory_service.py
 │   │   ├── run_service.py
+│   │   ├── scheduler_service.py
 │   │   ├── telegram_service.py
 │   │   ├── workflow_service.py
 │   │   └── workflow_template_service.py
@@ -330,7 +422,7 @@ Every workflow run records `prompt_tokens`, `completion_tokens`, `total_tokens`,
 
 ## Telegram Bot Flow
 
-1. Set your bot webhook to point at `POST /telegram/webhook`
+1. Set your bot webhook (see **Telegram Webhook Setup** above)
 2. Send a message — greetings are handled inline; task prompts trigger a full workflow run
 3. The bot replies with the final response from the specialist agent
 4. The run is persisted and visible in the dashboard run history

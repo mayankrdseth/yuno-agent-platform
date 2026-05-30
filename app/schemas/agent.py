@@ -16,6 +16,17 @@ class AgentBase(BaseModel):
     schedule_prompt: str | None = None
     forbidden_topics: list[str] = []
     max_output_chars: int | None = None
+    # Capability fields
+    skills: list[str] = Field(
+        default=[],
+        description="Capability labels for this agent, e.g. ['summarisation', 'code_review']. "
+                    "Visible to the orchestrator for routing decisions.",
+    )
+    interaction_rules: list[str] = Field(
+        default=[],
+        description="Behavioural rules injected into the agent's system prompt context, "
+                    "e.g. ['always reply in bullet points', 'respond only in English'].",
+    )
 
 
 class AgentCreate(AgentBase):
@@ -36,6 +47,8 @@ class AgentUpdate(BaseModel):
     schedule_prompt: str | None = None
     forbidden_topics: list[str] | None = None
     max_output_chars: int | None = None
+    skills: list[str] | None = None
+    interaction_rules: list[str] | None = None
 
 
 class AgentRead(AgentBase):

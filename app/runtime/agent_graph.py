@@ -13,7 +13,23 @@ Architecture
   specialist_node     <- one of N saved agents
       |  receives enriched prompt: memory_context + user_input
       |
+  retry_check_node    <- decides if the response needs to loop back
+      |  - empty response           → retry (re-route to different specialist)
+      |  - guardrail refusal prefix → retry
+      |  - orchestrator explicit    → retry if needs_retry flag set
+      |  - max_retries reached      → pass through to END
+      |
   response back to caller
+
+Retry / Feedback Loop
+---------------------
+  After each specialist run, retry_check_node evaluates the output.
+  If a retry is warranted AND retry_count < MAX_RETRIES (2), state["needs_retry"]
+  is set True and the graph edges route back to the orchestrator for re-routing.
+  The orchestrator receives the previous specialist output as additional context
+  so it can pick a *different* specialist — enabling sequential multi-agent handling
+  of compound / nested queries (e.g. "What is 2+2 and who invented calculus?"
+  first hits Mathematician, then on retry the orchestrator routes to Researcher).
 
 Memory
 ------
@@ -52,6 +68,9 @@ from app.runtime.state import TokenUsage, WorkflowState
 from app.runtime.tools import format_tools_for_prompt, get_tools_for_agent
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 2  # maximum specialist retries per workflow run
+_GUARDRAIL_PREFIX = "[Guardrail]"
 
 # Groq cost per 1k tokens (USD)
 _COST_PER_1K = {
@@ -101,7 +120,7 @@ def _apply_guardrails(
             if topic.strip().lower() in text_lower:
                 logger.warning("[%s] guardrail blocked — forbidden topic '%s'.", agent_name, topic)
                 return (
-                    f"[Guardrail] I'm not able to provide information on \"{topic}\" "
+                    f"{_GUARDRAIL_PREFIX} I'm not able to provide information on \"{topic}\" "
                     "as it falls outside my permitted scope."
                 )
     if max_output_chars and len(text) > max_output_chars:
@@ -130,6 +149,7 @@ async def run_agent_with_tools(
     max_output_chars: int | None = None,
     model: str = "",
     memory_context: str = "",
+    previous_attempt: str = "",
 ) -> tuple[str, list[dict], TokenUsage]:
     llm = get_llm(model) if model else get_llm()
     tool_calls_log: list[dict] = []
@@ -150,6 +170,17 @@ async def run_agent_with_tools(
     messages: list = [SystemMessage(content=system_prompt + tool_section)]
     if memory_context:
         messages.append(SystemMessage(content=memory_context))
+    # If a previous attempt was made (retry scenario), give the specialist that context
+    if previous_attempt:
+        messages.append(
+            SystemMessage(
+                content=(
+                    f"A previous attempt to answer this query produced the following response which "
+                    f"was insufficient or blocked:\n\n{previous_attempt}\n\n"
+                    "Please provide a better, complete answer."
+                )
+            )
+        )
     messages.append(HumanMessage(content=user_message))
 
     response = await llm.ainvoke(messages)
@@ -191,12 +222,17 @@ async def llm_route_and_detect(
     specialist_agents: list[dict],
     model: str = "",
     memory_turns: list[dict] | None = None,
+    previous_routing: str = "",
+    previous_output: str = "",
 ) -> tuple[dict[str, Any], TokenUsage]:
     """
     Combined orchestrator LLM call:
       1. Detects schedule intent
       2. If no schedule intent, routes to a specialist
       3. Builds memory_context to pass to the specialist
+
+    On retry runs, previous_routing and previous_output are injected so the
+    orchestrator can deliberately choose a DIFFERENT specialist.
 
     Returns dict with keys:
       target, reason, schedule_intent (null | {cron, prompt}), memory_context
@@ -215,9 +251,19 @@ async def llm_route_and_detect(
             for m in memory_turns
         ) + "\n"
 
+    retry_section = ""
+    if previous_routing and previous_output:
+        retry_section = (
+            f"\n\nPrevious routing attempt: '{previous_routing}' produced this response which "
+            f"was insufficient or blocked:\n{previous_output[:300]}\n"
+            "Please route to a DIFFERENT specialist that can better handle this query, "
+            "or the same specialist with a note that they should try harder.\n"
+        )
+
     routing_prompt = (
         f"{orchestrator_system_prompt}\n"
-        f"{history_section}\n"
+        f"{history_section}"
+        f"{retry_section}\n"
         "You are the orchestrator. For the user request below, do TWO things:\n"
         "1. Check if the user wants to SCHEDULE a recurring task "
         "(phrases like 'every day', 'every morning', 'weekly', 'remind me at', "
@@ -271,7 +317,15 @@ def build_agent_graph(
     memory_turns: list[dict] | None = None,
 ):
     """
-    Build and compile a LangGraph.
+    Build and compile a LangGraph with retry / feedback loop.
+
+    Flow:
+      START → orchestrator → specialist → retry_check
+                  ↑                            |
+                  |____ needs_retry=True ________|
+                                               |
+                                        needs_retry=False → END
+
     memory_turns: pre-fetched memory for this session (fetched by workflow_service).
     """
     if not specialists:
@@ -289,15 +343,24 @@ def build_agent_graph(
     specialists = [s for s in specialists if s["name"] != orchestrator["name"]]
     specialist_map = {a["name"]: a for a in specialists}
 
+    # ── Orchestrator node ────────────────────────────────────────────────────
     async def orchestrator_node(state: WorkflowState) -> WorkflowState:
         state["current_step"] = "orchestrator"
         state["status"] = "running"
+
+        # On retries pass previous routing + output so the orchestrator can
+        # choose a different (or better-instructed) specialist
+        prev_routing = state.get("routing_decision", "") if state.get("retry_count", 0) > 0 else ""
+        prev_output = state.get("last_specialist_output", "") if state.get("retry_count", 0) > 0 else ""
+
         route, usage = await llm_route_and_detect(
             user_input=state["user_input"],
             orchestrator_system_prompt=orchestrator["system_prompt"],
             specialist_agents=specialists,
             model=orchestrator.get("model", ""),
             memory_turns=memory_turns or [],
+            previous_routing=prev_routing,
+            previous_output=prev_output,
         )
         state["routing_decision"] = route.get("target", specialists[0]["name"])
         state["routing_reason"] = route.get("reason", "")
@@ -305,14 +368,14 @@ def build_agent_graph(
         state["memory_context"] = route.get("memory_context", "")
         existing = state.get("token_usage") or {}
         state["token_usage"] = _accumulate_usage(existing, usage)
+        state["needs_retry"] = False  # reset flag each time orchestrator runs
         logger.info(
-            "Orchestrator routed to: %s | schedule_intent: %s",
-            state["routing_decision"], state["schedule_intent"],
+            "Orchestrator routed to: %s | schedule_intent: %s | retry: %d",
+            state["routing_decision"], state["schedule_intent"], state.get("retry_count", 0),
         )
         return state
 
     def route_from_orchestrator(state: WorkflowState) -> str:
-        # If schedule was detected, short-circuit to END (no specialist needed)
         if state.get("schedule_intent"):
             return "__schedule_end__"
         target = state.get("routing_decision", "")
@@ -320,8 +383,8 @@ def build_agent_graph(
             return target
         return specialists[0]["name"]
 
+    # ── Schedule terminal node ───────────────────────────────────────────────
     async def schedule_end_node(state: WorkflowState) -> WorkflowState:
-        """Dummy terminal node hit when schedule intent is detected."""
         intent = state["schedule_intent"]
         state["final_response"] = (
             f"\u2705 Got it! I'll schedule this for you.\n"
@@ -332,6 +395,49 @@ def build_agent_graph(
         state["current_step"] = "schedule_end"
         return state
 
+    # ── Retry / feedback-check node ──────────────────────────────────────────
+    def retry_check_node(state: WorkflowState) -> WorkflowState:
+        """
+        Decides whether to retry:
+          - response is empty
+          - response starts with guardrail prefix
+          - AND retry_count has not exceeded MAX_RETRIES
+        """
+        response = state.get("final_response", "").strip()
+        retry_count = state.get("retry_count", 0)
+
+        should_retry = (
+            (not response or response.startswith(_GUARDRAIL_PREFIX))
+            and retry_count < MAX_RETRIES
+        )
+
+        if should_retry:
+            logger.info(
+                "retry_check: triggering retry %d/%d (response=%r)",
+                retry_count + 1, MAX_RETRIES, response[:60],
+            )
+            state["needs_retry"] = True
+            state["retry_count"] = retry_count + 1
+            state["last_specialist_output"] = response
+            # Clear final_response so it doesn't leak a bad value
+            state["final_response"] = ""
+        else:
+            state["needs_retry"] = False
+            if not response:
+                # Max retries hit with still no response — give a graceful error
+                state["final_response"] = "I was unable to produce a response for this request."
+                state["status"] = "failed"
+            else:
+                state["status"] = "completed"
+
+        return state
+
+    def route_from_retry_check(state: WorkflowState) -> str:
+        if state.get("needs_retry"):
+            return "orchestrator"  # loop back for re-routing
+        return "__end__"
+
+    # ── Specialist node factory ───────────────────────────────────────────────
     def make_specialist_node(agent_config: dict):
         async def specialist_node(state: WorkflowState) -> WorkflowState:
             name = agent_config["name"]
@@ -346,6 +452,10 @@ def build_agent_graph(
                     forbidden = []
             max_chars = agent_config.get("max_output_chars")
 
+            # Pass last specialist output on retries so the specialist knows
+            # what was tried before and can produce a better response
+            previous_attempt = state.get("last_specialist_output", "") if state.get("retry_count", 0) > 0 else ""
+
             response, tool_calls, usage = await run_agent_with_tools(
                 system_prompt=agent_config["system_prompt"],
                 user_message=state["user_input"],
@@ -355,12 +465,12 @@ def build_agent_graph(
                 max_output_chars=max_chars,
                 model=agent_config.get("model", ""),
                 memory_context=state.get("memory_context", ""),
+                previous_attempt=previous_attempt,
             )
 
             state["research_notes"] = response
-            state["tool_calls"] = tool_calls
+            state["tool_calls"] = (state.get("tool_calls") or []) + tool_calls
             state["final_response"] = response
-            state["status"] = "completed"
             existing = state.get("token_usage") or {}
             state["token_usage"] = _accumulate_usage(existing, usage)
             return state
@@ -368,9 +478,11 @@ def build_agent_graph(
         specialist_node.__name__ = agent_config["name"]
         return specialist_node
 
+    # ── Assemble the graph ───────────────────────────────────────────────────
     graph = StateGraph(WorkflowState)
     graph.add_node("orchestrator", orchestrator_node)
     graph.add_node("__schedule_end__", schedule_end_node)
+    graph.add_node("retry_check", retry_check_node)
 
     for agent in specialists:
         graph.add_node(agent["name"], make_specialist_node(agent))
@@ -379,11 +491,19 @@ def build_agent_graph(
 
     routing_map = {a["name"]: a["name"] for a in specialists}
     routing_map["__schedule_end__"] = "__schedule_end__"
-
     graph.add_conditional_edges("orchestrator", route_from_orchestrator, routing_map)
+
     graph.add_edge("__schedule_end__", END)
 
+    # All specialists feed into retry_check
     for agent in specialists:
-        graph.add_edge(agent["name"], END)
+        graph.add_edge(agent["name"], "retry_check")
+
+    # retry_check either loops back to orchestrator or goes to END
+    graph.add_conditional_edges(
+        "retry_check",
+        route_from_retry_check,
+        {"orchestrator": "orchestrator", "__end__": END},
+    )
 
     return graph.compile()

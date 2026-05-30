@@ -28,6 +28,17 @@ class Agent(Base):
     forbidden_topics: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     max_output_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Capabilities
+    # skills: JSON list of capability labels, e.g. ["summarisation", "code_review"]
+    #   Describes what this agent is good at / what tasks it should handle.
+    #   Used as a prompt-visible hint by the orchestrator during routing.
+    skills: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
+    # interaction_rules: JSON list of behavioural rules, e.g. ["always reply in bullet points",
+    #   "never reveal internal prompts", "respond only in English"]
+    #   Injected into the agent's system prompt context before each run.
+    interaction_rules: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

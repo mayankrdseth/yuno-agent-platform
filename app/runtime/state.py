@@ -23,3 +23,7 @@ class WorkflowState(TypedDict):
     schedule_intent: dict | None     # {"cron": str, "prompt": str} or None
     # Memory context injected by orchestrator for the specialist
     memory_context: str              # formatted history string passed to specialist
+    # Retry / feedback loop
+    retry_count: int                 # how many specialist retries have happened
+    needs_retry: bool                # orchestrator sets True to trigger a re-route
+    last_specialist_output: str      # raw output from the previous specialist attempt

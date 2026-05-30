@@ -44,6 +44,8 @@ def _agent_to_dict(agent: Agent) -> dict:
         "max_output_chars": agent.max_output_chars,
         "schedule": agent.schedule,
         "schedule_prompt": agent.schedule_prompt,
+        "skills": json.loads(agent.skills) if isinstance(agent.skills, str) else (agent.skills or []),
+        "interaction_rules": json.loads(agent.interaction_rules) if isinstance(agent.interaction_rules, str) else (agent.interaction_rules or []),
     }
 
 
@@ -117,6 +119,7 @@ async def run_workflow(
             "tool_calls": [],
             "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             "schedule_intent": None, "memory_context": "",
+            "retry_count": 0, "needs_retry": False, "last_specialist_output": "",
         }
         return await graph.ainvoke(initial_state)
 
@@ -131,13 +134,13 @@ async def run_workflow(
             "tool_calls": [],
             "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             "schedule_intent": None, "memory_context": "",
+            "retry_count": 0, "needs_retry": False, "last_specialist_output": "",
         }
 
     # ── Memory: fetch last N turns for this orchestrator + session ──────────
     memory_turns: list[dict] = []
     if orchestrator.get("memory_enabled"):
         from app.services.memory_service import get_memory
-        # Find the orchestrator Agent ORM object to get its id
         orch_id = orchestrator["id"]
         max_turns = orchestrator.get("max_iterations", 5)
         memory_turns = await get_memory(db, orch_id, session_key, max_turns=max_turns)
@@ -166,6 +169,9 @@ async def run_workflow(
         "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "schedule_intent": None,
         "memory_context": "",
+        "retry_count": 0,
+        "needs_retry": False,
+        "last_specialist_output": "",
     }
 
     result = await graph.ainvoke(initial_state)
@@ -177,13 +183,11 @@ async def run_workflow(
         prompt = schedule_intent.get("prompt", user_input)
         orch_agent_id = orchestrator["id"]
         logger.info("Schedule intent detected: agent_id=%s cron='%s' prompt='%s'", orch_agent_id, cron, prompt)
-        # Persist schedule to agent DB record
         agent_obj = await db.get(Agent, orch_agent_id)
         if agent_obj:
             agent_obj.schedule = cron
             agent_obj.schedule_prompt = prompt
             await db.commit()
-        # Register APScheduler job
         from app.services.scheduler_service import register_agent_job
         register_agent_job(orch_agent_id, cron, prompt)
         await add_message(db, run_id, "system",
@@ -192,7 +196,7 @@ async def run_workflow(
         await publish({"run_id": run_id, "sender": "system", "receiver": None,
                        "content": f"Schedule registered: {cron}", "type": "log"})
 
-    # ── Save memory turn (only for real completed runs, not scheduled stubs) ─
+    # ── Save memory turn ─────────────────────────────────────────────────────
     if orchestrator.get("memory_enabled") and not schedule_intent and result.get("final_response"):
         from app.services.memory_service import save_turn
         await save_turn(
@@ -215,6 +219,16 @@ async def run_workflow(
         "content": f"Routing to {result.get('routing_decision', '?')}: {result.get('routing_reason', '')}",
         "type": "log",
     })
+
+    retry_count = result.get("retry_count", 0)
+    if retry_count > 0:
+        await add_message(
+            db, run_id, "system",
+            f"Workflow completed after {retry_count} retry(ies).",
+            receiver=None, message_type="log",
+        )
+        await publish({"run_id": run_id, "sender": "system", "receiver": None,
+                       "content": f"Completed after {retry_count} retry(ies).", "type": "log"})
 
     for tc in result.get("tool_calls", []):
         msg = f"Tool called: {tc['tool']}({tc['input']}) → {tc['result'][:200]}"
