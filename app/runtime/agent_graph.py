@@ -89,9 +89,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from dataclasses import asdict
+from typing import Any, Union
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.runtime.llm import get_llm
@@ -117,28 +118,50 @@ _DEFAULT_COST = (0.00020, 0.00020)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _to_usage_dict(obj: Union[TokenUsage, dict, None]) -> dict:
+    """
+    Normalise a TokenUsage dataclass OR a plain dict (or None) into a plain
+    dict with keys prompt_tokens / completion_tokens / total_tokens.
+    This makes _accumulate_usage safe regardless of which type each call site
+    passes in.
+    """
+    if obj is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if isinstance(obj, TokenUsage):
+        return asdict(obj)
+    # already a dict — return as-is (missing keys default to 0 in accumulate)
+    return obj
+
+
 def _extract_usage(response) -> dict:
     meta = getattr(response, "usage_metadata", None) or {}
     return {
-        "prompt_tokens":    meta.get("input_tokens", 0),
+        "prompt_tokens":     meta.get("input_tokens", 0),
         "completion_tokens": meta.get("output_tokens", 0),
-        "total_tokens":     meta.get("total_tokens", 0),
+        "total_tokens":      meta.get("total_tokens", 0),
     }
 
 
-def _accumulate_usage(existing: dict, new: dict) -> TokenUsage:
+def _accumulate_usage(
+    existing: Union[TokenUsage, dict, None],
+    new: Union[TokenUsage, dict, None],
+) -> TokenUsage:
+    """Add two usage objects (either TokenUsage dataclass or dict) and return TokenUsage."""
+    a = _to_usage_dict(existing)
+    b = _to_usage_dict(new)
     return TokenUsage(
-        prompt_tokens    = existing.get("prompt_tokens", 0)    + new.get("prompt_tokens", 0),
-        completion_tokens= existing.get("completion_tokens", 0) + new.get("completion_tokens", 0),
-        total_tokens     = existing.get("total_tokens", 0)     + new.get("total_tokens", 0),
+        prompt_tokens     = a.get("prompt_tokens", 0)     + b.get("prompt_tokens", 0),
+        completion_tokens = a.get("completion_tokens", 0) + b.get("completion_tokens", 0),
+        total_tokens      = a.get("total_tokens", 0)      + b.get("total_tokens", 0),
     )
 
 
-def _estimate_cost(model: str, usage: dict) -> float:
+def _estimate_cost(model: str, usage: Union[TokenUsage, dict]) -> float:
+    d = _to_usage_dict(usage)
     in_cost, out_cost = _COST_PER_1K.get(model, _DEFAULT_COST)
     return (
-        usage.get("prompt_tokens", 0)    / 1000 * in_cost
-        + usage.get("completion_tokens", 0) / 1000 * out_cost
+        d.get("prompt_tokens", 0)     / 1000 * in_cost
+        + d.get("completion_tokens", 0) / 1000 * out_cost
     )
 
 
@@ -205,7 +228,7 @@ async def run_agent_with_tools(
     llm = get_llm(model) if model else get_llm()
     tool_calls_log: list[dict] = []
     tools = get_tools_for_agent(tool_names)
-    usage_acc: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    usage_acc: TokenUsage = TokenUsage()
 
     # Inject interaction_rules into the system prompt
     effective_system_prompt = _build_system_prompt_with_rules(
@@ -226,7 +249,6 @@ async def run_agent_with_tools(
     messages: list = [SystemMessage(content=effective_system_prompt + tool_section)]
     if memory_context:
         messages.append(SystemMessage(content=memory_context))
-    # If a previous attempt was made (retry scenario), give the specialist that context
     if previous_attempt:
         messages.append(
             SystemMessage(
@@ -269,7 +291,7 @@ async def run_agent_with_tools(
         max_output_chars=max_output_chars,
         agent_name=agent_name,
     )
-    return reply, tool_calls_log, TokenUsage(**usage_acc)
+    return reply, tool_calls_log, usage_acc
 
 
 # ── Orchestrator LLM call ─────────────────────────────────────────────────────
@@ -286,21 +308,12 @@ async def llm_route_and_detect(
     """
     Combined orchestrator LLM call:
       1. Detects schedule intent
-      2. If no schedule intent, routes to one OR multiple specialists
-         - Single target  → {"target": "<name>", ...}
-         - Multiple targets (compound query) → {"targets": ["<name1>", "<name2>"], ...}
+      2. Routes to one OR multiple specialists
       3. Builds memory_context to pass to the specialist(s)
       4. Uses skills labels for richer routing signal
-
-    On retry runs, previous_routing and previous_output are injected so the
-    orchestrator can deliberately choose a DIFFERENT specialist.
-
-    Returns dict with keys:
-      target | targets, reason, schedule_intent (null | {cron, prompt}), memory_context
     """
     llm = get_llm(model) if model else get_llm()
 
-    # Build agent listing with skills for richer routing signal
     agent_list_lines = []
     for a in specialist_agents:
         skills = a.get("skills") or []
@@ -364,24 +377,20 @@ async def llm_route_and_detect(
     )
 
     response = await llm.ainvoke(routing_prompt)
-    usage = _extract_usage(response)
+    usage = _extract_usage(response)   # always a plain dict here
     reply = response.content.strip()
 
     json_match = re.search(r'\{.*\}', reply, re.DOTALL)
     if json_match:
         try:
             data = json.loads(json_match.group())
-            # Normalise: if "targets" is returned but not "target", keep both forms
             if "targets" not in data and "target" in data:
                 data["targets"] = [data["target"]]
             elif "targets" in data and "target" not in data:
                 data["target"] = data["targets"][0] if data["targets"] else ""
-            # Clamp fan-out
             if "targets" in data:
                 data["targets"] = data["targets"][:MAX_FANOUT]
-            # Build memory_context for specialist(s)
-            memory_context = _format_memory_context(memory_turns or [])
-            data["memory_context"] = memory_context
+            data["memory_context"] = _format_memory_context(memory_turns or [])
             return data, TokenUsage(**usage)
         except json.JSONDecodeError:
             pass
@@ -403,32 +412,6 @@ def build_agent_graph(
     specialists: list[dict],
     memory_turns: list[dict] | None = None,
 ):
-    """
-    Build and compile a LangGraph with retry / feedback loop and
-    multi-specialist fan-out for compound queries.
-
-    Flow (single target):
-      START → orchestrator → specialist → retry_check
-                  ↑                            |
-                  |____ needs_retry=True ________| (up to MAX_RETRIES)
-                                               |
-                                        needs_retry=False → END
-
-    Flow (compound / multi-target):
-      START → orchestrator → fanout_node (runs all targets sequentially)
-                  ↑                |
-                  |                ▼
-                  |           retry_check
-                  |__ needs_retry __|
-                                   |
-                             needs_retry=False → END
-
-    skills:            each specialist's skill labels are injected into the
-                       orchestrator routing prompt for smarter routing.
-    interaction_rules: each specialist's rules are injected into its system
-                       prompt before every LLM call.
-    memory_turns:      pre-fetched memory for this session (fetched by workflow_service).
-    """
     if not specialists:
         raise ValueError("At least one specialist agent is required.")
 
@@ -461,21 +444,19 @@ def build_agent_graph(
             previous_routing=prev_routing,
             previous_output=prev_output,
         )
-
+        # usage is TokenUsage here; _accumulate_usage handles it via _to_usage_dict
         targets: list[str] = route.get("targets") or [route.get("target", specialists[0]["name"])]
-        # Validate — keep only known specialist names
         targets = [t for t in targets if t in specialist_map]
         if not targets:
             targets = [specialists[0]["name"]]
 
-        state["routing_decision"] = targets[0]          # primary target (backwards compat)
-        state["routing_targets"]  = targets              # all targets for fan-out
+        state["routing_decision"] = targets[0]
+        state["routing_targets"]  = targets
         state["routing_reason"]   = route.get("reason", "")
         state["schedule_intent"]  = route.get("schedule_intent")
         state["memory_context"]   = route.get("memory_context", "")
-        existing = state.get("token_usage") or {}
-        state["token_usage"] = _accumulate_usage(existing, usage)
-        state["needs_retry"] = False
+        state["token_usage"]      = _accumulate_usage(state.get("token_usage"), usage)
+        state["needs_retry"]      = False
         logger.info(
             "Orchestrator routed to: %s | compound=%s | schedule_intent: %s | retry: %d",
             targets, len(targets) > 1, state["schedule_intent"], state.get("retry_count", 0),
@@ -505,16 +486,12 @@ def build_agent_graph(
         state["current_step"] = "schedule_end"
         return state
 
-    # ── Fan-out node (compound query: run multiple specialists sequentially) ──
+    # ── Fan-out node ──────────────────────────────────────────────────────────
     async def fanout_node(state: WorkflowState) -> WorkflowState:
-        """
-        Runs each target specialist in sequence for compound queries.
-        Responses are labelled and merged into a single final_response.
-        """
-        targets  = state.get("routing_targets") or [state.get("routing_decision")]
-        all_responses: list[str] = []
+        targets        = state.get("routing_targets") or [state.get("routing_decision")]
+        all_responses: list[str]  = []
         all_tool_calls: list[dict] = list(state.get("tool_calls") or [])
-        accumulated_usage = state.get("token_usage") or {}
+        acc_usage: TokenUsage = _accumulate_usage(state.get("token_usage"), None)
 
         for target_name in targets:
             agent_config = specialist_map.get(target_name)
@@ -556,24 +533,18 @@ def build_agent_graph(
 
             all_responses.append(f"**{target_name}:**\n{response}")
             all_tool_calls.extend(tool_calls)
-            accumulated_usage = _accumulate_usage(accumulated_usage, usage)
+            acc_usage = _accumulate_usage(acc_usage, usage)
             logger.info("fanout: specialist '%s' completed.", target_name)
 
         merged = "\n\n".join(all_responses) if all_responses else ""
         state["final_response"] = merged
         state["research_notes"] = merged
         state["tool_calls"]     = all_tool_calls
-        state["token_usage"]    = accumulated_usage
+        state["token_usage"]    = acc_usage
         return state
 
     # ── Retry / feedback-check node ───────────────────────────────────────────
     def retry_check_node(state: WorkflowState) -> WorkflowState:
-        """
-        Decides whether to retry:
-          - response is empty
-          - response starts with guardrail prefix
-          - AND retry_count has not exceeded MAX_RETRIES
-        """
         response    = state.get("final_response", "").strip()
         retry_count = state.get("retry_count", 0)
 
@@ -587,10 +558,10 @@ def build_agent_graph(
                 "retry_check: triggering retry %d/%d (response=%r)",
                 retry_count + 1, MAX_RETRIES, response[:60],
             )
-            state["needs_retry"]           = True
-            state["retry_count"]           = retry_count + 1
+            state["needs_retry"]            = True
+            state["retry_count"]            = retry_count + 1
             state["last_specialist_output"] = response
-            state["final_response"]        = ""
+            state["final_response"]         = ""
         else:
             state["needs_retry"] = False
             if not response:
@@ -602,9 +573,7 @@ def build_agent_graph(
         return state
 
     def route_from_retry_check(state: WorkflowState) -> str:
-        if state.get("needs_retry"):
-            return "orchestrator"
-        return "__end__"
+        return "orchestrator" if state.get("needs_retry") else "__end__"
 
     # ── Specialist node factory ───────────────────────────────────────────────
     def make_specialist_node(agent_config: dict):
@@ -647,8 +616,7 @@ def build_agent_graph(
             state["research_notes"] = response
             state["tool_calls"]     = (state.get("tool_calls") or []) + tool_calls
             state["final_response"] = response
-            existing = state.get("token_usage") or {}
-            state["token_usage"] = _accumulate_usage(existing, usage)
+            state["token_usage"]    = _accumulate_usage(state.get("token_usage"), usage)
             return state
 
         specialist_node.__name__ = agent_config["name"]
@@ -656,10 +624,10 @@ def build_agent_graph(
 
     # ── Assemble the graph ────────────────────────────────────────────────────
     graph = StateGraph(WorkflowState)
-    graph.add_node("orchestrator",      orchestrator_node)
-    graph.add_node("__schedule_end__",  schedule_end_node)
-    graph.add_node("__fanout__",        fanout_node)
-    graph.add_node("retry_check",       retry_check_node)
+    graph.add_node("orchestrator",     orchestrator_node)
+    graph.add_node("__schedule_end__", schedule_end_node)
+    graph.add_node("__fanout__",       fanout_node)
+    graph.add_node("retry_check",      retry_check_node)
 
     for agent in specialists:
         graph.add_node(agent["name"], make_specialist_node(agent))
@@ -674,11 +642,9 @@ def build_agent_graph(
     graph.add_edge("__schedule_end__", END)
     graph.add_edge("__fanout__",       "retry_check")
 
-    # All individual specialists feed into retry_check
     for agent in specialists:
         graph.add_edge(agent["name"], "retry_check")
 
-    # retry_check either loops back to orchestrator or goes to END
     graph.add_conditional_edges(
         "retry_check",
         route_from_retry_check,
