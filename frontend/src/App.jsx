@@ -162,6 +162,7 @@ export default function App() {
   const [runError, setRunError] = useState("");
 
   const [templates, setTemplates] = useState([]);
+  const [activeTemplateId, setActiveTemplateId] = useState(null);
   const [templateName, setTemplateName] = useState("");
   const [templateDesc, setTemplateDesc] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -190,9 +191,7 @@ export default function App() {
     const res = await axios.get(`${API_BASE}/agents`);
     const fetched = res.data;
     setAgents(fetched);
-    const { nodes: n, edges: e } = buildHubLayout(fetched);
-    setNodes(n);
-    setEdges(e);
+    // NOTE: Do NOT auto-populate canvas here — templates handle canvas state
     return fetched;
   }
 
@@ -209,7 +208,14 @@ export default function App() {
 
   async function loadTemplates() {
     const res = await axios.get(`${API_BASE}/workflow-templates`);
-    setTemplates(res.data);
+    const data = res.data;
+    setTemplates(data);
+    if (!data.length) return;
+
+    // Auto-load: prefer last selected (stored in sessionStorage), fallback to first
+    const lastId = sessionStorage.getItem("lastTemplateId");
+    const toLoad = (lastId && data.find((t) => String(t.id) === lastId)) ?? data[0];
+    if (toLoad) await loadTemplate(toLoad, data);
   }
 
   // ── Agent CRUD ──
@@ -297,8 +303,9 @@ export default function App() {
     } finally { setSavingTemplate(false); }
   }
 
-  async function loadTemplate(tpl) {
-    const currentAgents = agents.length ? agents : await loadAgents();
+  // agentOverride lets loadTemplates() pass already-fetched agents to avoid a race condition
+  async function loadTemplate(tpl, agentOverride) {
+    const currentAgents = agentOverride ?? (agents.length ? agents : await loadAgents());
     let resolvedIds;
     if (tpl.is_builtin) {
       const nameToId = Object.fromEntries(currentAgents.map((a) => [a.name.toLowerCase(), a.id]));
@@ -320,12 +327,20 @@ export default function App() {
     } else {
       setNodes(n); setEdges(e);
     }
+    // Remember this selection for next page load
+    setActiveTemplateId(tpl.id);
+    sessionStorage.setItem("lastTemplateId", String(tpl.id));
   }
 
   async function deleteTemplate(id) {
     if (!window.confirm("Delete this workflow template?")) return;
     try {
       await axios.delete(`${API_BASE}/workflow-templates/${id}`);
+      if (activeTemplateId === id) {
+        setActiveTemplateId(null);
+        sessionStorage.removeItem("lastTemplateId");
+        setNodes([]); setEdges([]);
+      }
       await loadTemplates();
     } catch (err) {
       alert(err?.response?.data?.detail || "Failed to delete template.");
@@ -519,7 +534,7 @@ export default function App() {
                 <h2>Visual Builder</h2>
               </div>
               <div className="muted-small" style={{ fontSize: 11, marginTop: 4 }}>
-                Drag handles to connect · Select + Delete removes edge/node · Only canvas agents run
+                Drag handles to connect · Select + Delete removes edge/node · Only canvas agents run
               </div>
             </div>
             <div className="flow-wrap">
@@ -572,29 +587,39 @@ export default function App() {
               <div style={{ marginBottom: 12 }}>
                 <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Load onto canvas</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {templates.map((tpl) => (
-                    <div key={tpl.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f1117", borderRadius: 6, padding: "7px 10px", border: "1px solid #2d3348" }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6 }}>
-                          {tpl.name}
-                          {tpl.is_builtin === 1 && <span style={{ fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
+                  {templates.map((tpl) => {
+                    const isActive = tpl.id === activeTemplateId;
+                    return (
+                      <div key={tpl.id} style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        background: isActive ? "#1affd508" : "#0f1117",
+                        borderRadius: 6, padding: "7px 10px",
+                        border: isActive ? "1px solid #1affd540" : "1px solid #2d3348",
+                        transition: "border-color 0.2s, background 0.2s",
+                      }}>
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6 }}>
+                            {isActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1affd5", display: "inline-block", flexShrink: 0 }} />}
+                            {tpl.name}
+                            {tpl.is_builtin === 1 && <span style={{ fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
+                          </div>
+                          {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>{tpl.description}</div>}
                         </div>
-                        {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>{tpl.description}</div>}
-                      </div>
-                      <div style={{ display: "flex", gap: 5 }}>
-                        <button onClick={() => loadTemplate(tpl)}
-                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
-                          Load
-                        </button>
-                        {tpl.is_builtin !== 1 && (
-                          <button onClick={() => deleteTemplate(tpl.id)}
-                            style={{ fontSize: 11, padding: "3px 7px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
-                            🗑
+                        <div style={{ display: "flex", gap: 5 }}>
+                          <button onClick={() => loadTemplate(tpl)}
+                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
+                            Load
                           </button>
-                        )}
+                          {tpl.is_builtin !== 1 && (
+                            <button onClick={() => deleteTemplate(tpl.id)}
+                              style={{ fontSize: 11, padding: "3px 7px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
+                              🗑
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {templates.length === 0 && <div className="muted-small" style={{ fontSize: 11 }}>No templates yet.</div>}
                 </div>
               </div>
