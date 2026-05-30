@@ -39,13 +39,13 @@ async def execute_demo_workflow(
         run.id,
         payload.user_input,
         agent_ids=payload.agent_ids,
+        session_key=payload.session_key,
     )
 
     run = await db.get(WorkflowRun, run.id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # Extract token usage from result
     usage = result.get("token_usage") or {}
     total_tokens = usage.get("total_tokens") or None
     prompt_tokens = usage.get("prompt_tokens") or None
@@ -65,6 +65,7 @@ async def execute_demo_workflow(
         research_notes=result["research_notes"],
         final_response=result["final_response"],
         status=result["status"],
+        schedule_intent=result.get("schedule_intent"),
     )
 
 
@@ -100,7 +101,6 @@ async def get_workflow_run_messages(
     run = await get_run(db, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-
     messages = await get_run_messages(db, run_id)
     return [
         WorkflowMessageRead(

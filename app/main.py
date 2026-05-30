@@ -7,6 +7,7 @@ from app.api import api_router
 from app.core.config import get_settings
 from app.db.init_db import init_db
 from app.services.telegram_service import setup_telegram_handlers
+from app.services.scheduler_service import start_scheduler, reload_all_jobs
 
 settings = get_settings()
 
@@ -15,6 +16,8 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     await init_db()
     await setup_telegram_handlers()
+    start_scheduler()
+    await reload_all_jobs()
     yield
 
 
@@ -40,7 +43,4 @@ app.include_router(api_router)
 
 @app.get("/")
 async def root():
-    return {
-        "message": "Yuno Agent Platform API",
-        "env": settings.app_env,
-    }
+    return {"message": "Yuno Agent Platform API", "env": settings.app_env}

@@ -7,6 +7,7 @@ from app.db.base import Base
 from app.db.session import engine, AsyncSessionLocal
 from app.models import agent  # noqa: F401
 from app.models import workflow_template  # noqa: F401
+from app.models import conversation_memory  # noqa: F401  — registers table
 from app.models.agent import Agent
 from app.models.workflow_template import WorkflowTemplate
 
@@ -38,7 +39,6 @@ BUILTIN_TEMPLATES = [
 
 # ─── Pre-built agents ────────────────────────────────────────────────────────
 BUILTIN_AGENTS = [
-    # ─ Template 1: Research Hub ───────────────────────────────────────────
     {
         "name": "ResearchOrchestrator",
         "role": "orchestrator",
@@ -53,7 +53,7 @@ BUILTIN_AGENTS = [
         "tools": [],
         "channels": ["telegram"],
         "is_active": True,
-        "max_iterations": 3,
+        "max_iterations": 5,
         "memory_enabled": True,
         "forbidden_topics": [],
         "max_output_chars": None,
@@ -71,7 +71,7 @@ BUILTIN_AGENTS = [
         "channels": [],
         "is_active": True,
         "max_iterations": 5,
-        "memory_enabled": True,
+        "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
     },
@@ -88,11 +88,10 @@ BUILTIN_AGENTS = [
         "channels": [],
         "is_active": True,
         "max_iterations": 5,
-        "memory_enabled": True,
+        "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
     },
-    # ─ Template 2: Support Triage ───────────────────────────────────────
     {
         "name": "SupportOrchestrator",
         "role": "orchestrator",
@@ -106,7 +105,7 @@ BUILTIN_AGENTS = [
         "tools": [],
         "channels": ["telegram"],
         "is_active": True,
-        "max_iterations": 3,
+        "max_iterations": 5,
         "memory_enabled": True,
         "forbidden_topics": [],
         "max_output_chars": None,
@@ -124,7 +123,7 @@ BUILTIN_AGENTS = [
         "channels": [],
         "is_active": True,
         "max_iterations": 3,
-        "memory_enabled": True,
+        "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
     },
@@ -142,7 +141,7 @@ BUILTIN_AGENTS = [
         "channels": [],
         "is_active": True,
         "max_iterations": 5,
-        "memory_enabled": True,
+        "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
     },
@@ -150,12 +149,9 @@ BUILTIN_AGENTS = [
 
 
 async def _seed_builtin_agents() -> None:
-    """Insert built-in agents if they don't already exist (idempotent by name)."""
     async with AsyncSessionLocal() as db:
         for agent_def in BUILTIN_AGENTS:
-            result = await db.execute(
-                select(Agent).where(Agent.name == agent_def["name"])
-            )
+            result = await db.execute(select(Agent).where(Agent.name == agent_def["name"]))
             if result.scalar_one_or_none():
                 continue
             db.add(Agent(
@@ -171,34 +167,29 @@ async def _seed_builtin_agents() -> None:
                 forbidden_topics=json.dumps(agent_def["forbidden_topics"]),
                 max_output_chars=agent_def["max_output_chars"],
             ))
-            logger.info("Seeded built-in agent: %s (%s)", agent_def["name"], agent_def["role"])
+            logger.info("Seeded agent: %s (%s)", agent_def["name"], agent_def["role"])
         await db.commit()
 
 
 async def _seed_builtin_templates() -> None:
-    """Insert built-in templates if they don't already exist (idempotent by name)."""
     async with AsyncSessionLocal() as db:
         for tpl_def in BUILTIN_TEMPLATES:
-            result = await db.execute(
-                select(WorkflowTemplate).where(WorkflowTemplate.name == tpl_def["name"])
-            )
+            result = await db.execute(select(WorkflowTemplate).where(WorkflowTemplate.name == tpl_def["name"]))
             if result.scalar_one_or_none():
                 continue
             db.add(WorkflowTemplate(
                 name=tpl_def["name"],
                 description=tpl_def["description"],
                 agent_ids=json.dumps(tpl_def["agent_names"]),
-                edges=json.dumps(
-                    [{"source": s, "target": t} for s, t in tpl_def["edge_pairs"]]
-                ),
+                edges=json.dumps([{"source": s, "target": t} for s, t in tpl_def["edge_pairs"]]),
                 is_builtin=1,
             ))
-            logger.info("Seeded built-in template: %s", tpl_def["name"])
+            logger.info("Seeded template: %s", tpl_def["name"])
         await db.commit()
 
 
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    await _seed_builtin_agents()       # agents first — templates reference their names
+    await _seed_builtin_agents()
     await _seed_builtin_templates()

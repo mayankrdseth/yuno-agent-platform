@@ -1,10 +1,12 @@
-from typing import TypedDict
+from dataclasses import dataclass, field
+from typing import Any, TypedDict
 
 
-class TokenUsage(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+@dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class WorkflowState(TypedDict):
@@ -16,4 +18,8 @@ class WorkflowState(TypedDict):
     routing_decision: str
     routing_reason: str
     tool_calls: list[dict]
-    token_usage: TokenUsage
+    token_usage: Any
+    # Schedule intent extracted by orchestrator
+    schedule_intent: dict | None     # {"cron": str, "prompt": str} or None
+    # Memory context injected by orchestrator for the specialist
+    memory_context: str              # formatted history string passed to specialist

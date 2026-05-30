@@ -12,6 +12,7 @@ class WorkflowRunRequest(BaseModel):
     user_input: str = Field(min_length=1)
     agent_ids: list[int] | None = None
     edges: list[WorkflowEdge] | None = None
+    session_key: str = "ui_session"
 
 
 class WorkflowRunResponse(BaseModel):
@@ -19,6 +20,7 @@ class WorkflowRunResponse(BaseModel):
     research_notes: str
     final_response: str
     status: str
+    schedule_intent: dict | None = None
 
 
 class WorkflowRunSummary(BaseModel):
@@ -29,7 +31,6 @@ class WorkflowRunSummary(BaseModel):
     output_text: str | None
     created_at: str
     completed_at: str | None
-    # Token + cost fields (None for older runs before this feature)
     total_tokens: int | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None

@@ -16,9 +16,13 @@ class Agent(Base):
     channels: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # Memory — only meaningful on orchestrator agents
     max_iterations: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     memory_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Schedule — cron string + fixed prompt fired when cron triggers
     schedule: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    schedule_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Guardrails
     forbidden_topics: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
