@@ -365,7 +365,6 @@ function ScheduledJobsPanel() {
             padding: "12px 14px",
             position: "relative",
           }}>
-            {/* Header row */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -390,8 +389,7 @@ function ScheduledJobsPanel() {
               </button>
             </div>
 
-            {/* Prompt preview */}
-            {job.prompt && (
+            {job.prompt ? (
               <div style={{
                 fontSize: 12, color: "#9ca3af",
                 background: "#1a1f2e", borderRadius: 5,
@@ -401,15 +399,14 @@ function ScheduledJobsPanel() {
               }}>
                 {job.prompt}
               </div>
-            )}
+            ) : null}
 
-            {/* Next run */}
-            {job.next_run_utc && (
+            {job.next_run_utc ? (
               <div style={{ fontSize: 10, color: "#6b7280", display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ color: "#22c55e" }}>⏰</span>
                 Next run: {new Date(job.next_run_utc).toLocaleString()}
               </div>
-            )}
+            ) : null}
           </div>
         ))}
       </div>
@@ -430,7 +427,6 @@ export default function App() {
   const [runError, setRunError] = useState("");
   const [editingAgent, setEditingAgent] = useState(null);
 
-  // Bottom panel tab: "runs" | "messages" | "monitor" | "scheduled"
   const [bottomTab, setBottomTab] = useState("runs");
 
   const [templates, setTemplates] = useState([]);
@@ -458,7 +454,6 @@ export default function App() {
 
   const isOrchestratorForm = agentForm.role === "orchestrator";
 
-  // ── Data loaders ──
   async function loadAgents() {
     const res = await axios.get(`${API_BASE}/agents`);
     const fetched = res.data;
@@ -482,11 +477,10 @@ export default function App() {
       const res = await axios.get(`${API_BASE}/workflow-templates`);
       setTemplates(res.data);
     } catch {
-      // silently ignore — templates are optional
+      // silently ignore
     }
   }
 
-  // ── After an agent edit: refresh list + update canvas nodes in-place ──
   async function handleAgentSaved() {
     const fetched = await loadAgents();
     setNodes((nds) => nds.map((n) => {
@@ -496,7 +490,6 @@ export default function App() {
     }));
   }
 
-  // ── Agent CRUD ──
   async function createAgent(e) {
     e.preventDefault();
     const payload = {
@@ -536,7 +529,6 @@ export default function App() {
     setAgentForm((f) => ({ ...f, channels: f.channels.includes(ch) ? f.channels.filter((c) => c !== ch) : [...f.channels, ch] }));
   }
 
-  // ── Workflow builder ──
   function addAgentToWorkflow(agent) {
     if (nodes.find((n) => n.id === String(agent.id))) return;
     const orchNode = nodes.find((n) => n.data.role === "orchestrator");
@@ -560,7 +552,6 @@ export default function App() {
     setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: "#1affd5", strokeWidth: 2 } }, eds));
   }, [setEdges, setNodes]);
 
-  // ── Templates ──
   async function saveTemplate() {
     if (!templateName.trim()) { setTemplateMsg("Please enter a workflow name."); return; }
     if (nodes.length < 2) { setTemplateMsg("Add at least 2 agents to the canvas before saving."); return; }
@@ -624,7 +615,6 @@ export default function App() {
     }
   }
 
-  // ── Run workflow ──
   async function runWorkflow() {
     setRunError("");
     const hasOrch = nodes.some((n) => n.data.role === "orchestrator");
@@ -636,7 +626,6 @@ export default function App() {
       const edgePayload = edges.map((e) => ({ source: e.source, target: e.target }));
       const res = await axios.post(`${API_BASE}/workflows/demo-run`, { user_input: workflowInput, agent_ids, edges: edgePayload });
       await loadRuns();
-      // If a schedule was just registered, switch to the Scheduled Jobs tab
       if (res.data?.schedule_intent) {
         setBottomTab("scheduled");
       }
@@ -662,7 +651,6 @@ export default function App() {
 
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
 
-  // ── Tab button style helper ──
   function tabStyle(tab) {
     const active = bottomTab === tab;
     return {
@@ -680,13 +668,13 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {editingAgent && (
+      {editingAgent ? (
         <EditAgentModal
           agent={editingAgent}
           onClose={() => setEditingAgent(null)}
           onSaved={handleAgentSaved}
         />
-      )}
+      ) : null}
 
       <aside className="sidebar">
         <div>
@@ -731,7 +719,7 @@ export default function App() {
                 ))}
               </div>
             </div>
-            {isOrchestratorForm && (
+            {isOrchestratorForm ? (
               <div>
                 <div className="muted-small" style={{ marginBottom: 6 }}>Channels <span style={{ color: "#f59e0b", fontSize: 10 }}>(orchestrator only)</span></div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -743,7 +731,7 @@ export default function App() {
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
             <input placeholder="Forbidden topics (comma-separated)" value={agentForm.forbidden_topics}
               onChange={(e) => setAgentForm({ ...agentForm, forbidden_topics: e.target.value })} />
             <input type="number" placeholder="Max output chars (optional)" value={agentForm.max_output_chars}
@@ -770,12 +758,12 @@ export default function App() {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
                         <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, display: "block" }}>{agent.name}</strong>
-                        {isOrch && (
+                        {isOrch ? (
                           <span style={{ flexShrink: 0, fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>
-                        )}
-                        {agent.schedule && (
+                        ) : null}
+                        {agent.schedule ? (
                           <span title={`Scheduled: ${agent.schedule}`} style={{ flexShrink: 0, fontSize: 9, background: "#22c55e18", color: "#22c55e", border: "1px solid #22c55e35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>⏰ SCHED</span>
-                        )}
+                        ) : null}
                       </div>
                       <div className="muted-small">{agent.role} · {agent.model?.split("-")[0] ?? ""}</div>
                     </div>
@@ -801,20 +789,20 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                  {tools.length > 0 && (
+                  {tools.length > 0 ? (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                       {tools.map((t) => <span key={t} className="badge" style={{ background: "#f59e0b20", color: "#f59e0b", fontSize: 10 }}>🔧 {t}</span>)}
                     </div>
-                  )}
-                  {channels.length > 0 && (
+                  ) : null}
+                  {channels.length > 0 ? (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                       {channels.map((c) => <span key={c} className="badge" style={{ background: "#0ea5e920", color: "#0ea5e9", fontSize: 10 }}>📡 {c}</span>)}
                     </div>
-                  )}
+                  ) : null}
                 </div>
               );
             })}
-            {agents.length === 0 && <div className="muted-small">No agents yet.</div>}
+            {agents.length === 0 ? <div className="muted-small">No agents yet.</div> : null}
           </div>
         </section>
       </aside>
@@ -861,14 +849,14 @@ export default function App() {
               <h2>Run Workflow</h2>
               <div className="muted-small" style={{ marginBottom: 8, fontSize: 11 }}>
                 Runs only the {nodes.length} agent{nodes.length !== 1 ? "s" : ""} currently on the canvas.
-                {!nodes.some((n) => n.data.role === "orchestrator") && nodes.length > 0 && (
+                {!nodes.some((n) => n.data.role === "orchestrator") && nodes.length > 0 ? (
                   <span style={{ color: "#f59e0b", marginLeft: 6 }}>⚠ No orchestrator on canvas.</span>
-                )}
+                ) : null}
               </div>
               <textarea rows="4" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
-              {runError && (
+              {runError ? (
                 <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {runError}</div>
-              )}
+              ) : null}
               <button className="primary-btn" onClick={runWorkflow} disabled={loading} style={{ marginTop: 10 }}>
                 {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
               </button>
@@ -883,6 +871,9 @@ export default function App() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {templates.map((tpl) => {
                     const isActive = tpl.id === activeTemplateId;
+                    const builtinBadge = tpl.is_builtin === 1
+                      ? <span style={{ flexShrink: 0, fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>
+                      : null;
                     return (
                       <div key={tpl.id} style={{
                         display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -894,7 +885,144 @@ export default function App() {
                       }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                            {isActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1affd5", display: "inline-block", flexShrink: 0 }} />}
+                            {isActive ? <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1affd5", display: "inline-block", flexShrink: 0 }} /> : null}
                             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
-                            {tpl.is_builtin === 1 && <span style={{ flexShrink: 0, fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
-    
+                            {builtinBadge}
+                          </div>
+                          {tpl.description ? <div className="muted-small" style={{ fontSize: 11, marginTop: 2 }}>{tpl.description}</div> : null}
+                        </div>
+                        <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                          <button onClick={() => loadTemplate(tpl)}
+                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
+                            Load
+                          </button>
+                          {tpl.is_builtin !== 1 ? (
+                            <button onClick={() => deleteTemplate(tpl.id)}
+                              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
+                              🗑
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {templates.length === 0 ? <div className="muted-small" style={{ fontSize: 11 }}>No templates yet.</div> : null}
+                </div>
+              </div>
+
+              {/* Save current canvas as template */}
+              <div style={{ borderTop: "1px solid #2d3348", paddingTop: 12 }}>
+                <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Save canvas as template</div>
+                <input placeholder="Workflow name" value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  style={{ marginBottom: 6 }} />
+                <input placeholder="Description (optional)" value={templateDesc}
+                  onChange={(e) => setTemplateDesc(e.target.value)}
+                  style={{ marginBottom: 8 }} />
+                <button onClick={saveTemplate} disabled={savingTemplate} className="primary-btn" style={{ width: "100%", fontSize: 12 }}>
+                  {savingTemplate ? "Saving..." : "Save as template"}
+                </button>
+                {templateMsg ? <div style={{ fontSize: 11, marginTop: 6, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f59e0b" }}>{templateMsg}</div> : null}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Bottom Panel ── */}
+        <section className="bottom-panel">
+          <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #2d3348", paddingInline: 16, paddingTop: 12 }}>
+            <button style={tabStyle("runs")} onClick={() => setBottomTab("runs")}>Run History</button>
+            <button style={tabStyle("messages")} onClick={() => setBottomTab("messages")}>
+              Messages {selectedRun ? `— Run #${selectedRun.id}` : ""}
+            </button>
+            <button style={tabStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor</button>
+            <button style={tabStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
+          </div>
+
+          <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
+            {bottomTab === "runs" && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className="eyebrow">History</div>
+                  <button onClick={loadRuns}
+                    style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>
+                    ↻ Refresh
+                  </button>
+                </div>
+                <div className="list">
+                  {runs.map((run) => (
+                    <div key={run.id} className="list-item" style={{ cursor: "pointer", flexDirection: "column", alignItems: "flex-start", gap: 4 }}
+                      onClick={() => loadMessages(run.id)}>
+                      <div style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center" }}>
+                        <strong style={{ fontSize: 13 }}>Run #{run.id}</strong>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+                          background: run.status === "completed" ? "#22c55e20" : run.status === "failed" ? "#ef444420" : "#f59e0b20",
+                          color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b",
+                        }}>{run.status}</span>
+                      </div>
+                      <div className="muted-small" style={{ fontSize: 11 }}>{run.user_input?.slice(0, 80)}{run.user_input?.length > 80 ? "..." : ""}</div>
+                      <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#6b7280" }}>
+                        {run.total_tokens ? <span>🔢 {run.total_tokens} tokens</span> : null}
+                        {run.total_cost_usd ? <span>💰 ${run.total_cost_usd.toFixed(4)}</span> : null}
+                        {run.created_at ? <span>🕐 {new Date(run.created_at).toLocaleTimeString()}</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                  {runs.length === 0 ? <div className="muted-small">No runs yet. Run a workflow above.</div> : null}
+                </div>
+              </div>
+            )}
+
+            {bottomTab === "messages" && (
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 10 }}>
+                  {selectedRun ? `Messages — Run #${selectedRun.id} (${selectedRun.status})` : "Select a run to view messages"}
+                </div>
+                <div className="list">
+                  {messages.map((msg) => (
+                    <div key={msg.id} className="list-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <MessageTypeTag type={msg.message_type} />
+                        {msg.agent_name ? <span style={{ fontSize: 11, color: "#6b7280" }}>{msg.agent_name}</span> : null}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#d1d5db", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                    </div>
+                  ))}
+                  {messages.length === 0 ? <div className="muted-small">No messages. Click a run above.</div> : null}
+                </div>
+              </div>
+            )}
+
+            {bottomTab === "monitor" && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className="eyebrow">Live Events (WebSocket)</div>
+                  <button onClick={() => setLiveEvents([])}
+                    style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>
+                    Clear
+                  </button>
+                </div>
+                <div className="list">
+                  {liveEvents.map((evt, i) => (
+                    <div key={i} className="list-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <MessageTypeTag type={evt.type || "log"} />
+                        {evt.agent ? <span style={{ fontSize: 11, color: "#6b7280" }}>{evt.agent}</span> : null}
+                        {evt.run_id ? <span style={{ fontSize: 10, color: "#4b5563" }}>run #{evt.run_id}</span> : null}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#d1d5db", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{evt.content || JSON.stringify(evt)}</div>
+                    </div>
+                  ))}
+                  {liveEvents.length === 0 ? <div className="muted-small">Waiting for live events… Run a workflow to see activity.</div> : null}
+                </div>
+              </div>
+            )}
+
+            {bottomTab === "scheduled" && <ScheduledJobsPanel />}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
