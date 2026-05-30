@@ -114,3 +114,60 @@ async def get_workflow_run_messages(
         )
         for msg in messages
     ]
+
+
+# ── Scheduled Jobs ──────────────────────────────────────────────────────────
+
+@router.get("/scheduled-jobs")
+async def list_scheduled_jobs(
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    Return all active APScheduler cron jobs.
+    Each entry includes: job_id, agent_id, agent_name, cron, prompt, next_run_utc.
+    """
+    from app.models.agent import Agent
+    from app.services.scheduler_service import get_scheduler
+
+    scheduler = get_scheduler()
+    jobs = scheduler.get_jobs()
+
+    result = []
+    for job in jobs:
+        if not job.id.startswith("agent_schedule_"):
+            continue
+        agent_id = int(job.id.replace("agent_schedule_", ""))
+        agent = await db.get(Agent, agent_id)
+        next_run = job.next_run_time.isoformat() if job.next_run_time else None
+        result.append({
+            "job_id": job.id,
+            "agent_id": agent_id,
+            "agent_name": agent.name if agent else f"agent_{agent_id}",
+            "cron": agent.schedule if agent else "",
+            "prompt": agent.schedule_prompt if agent else "",
+            "next_run_utc": next_run,
+        })
+    return result
+
+
+@router.delete("/scheduled-jobs/{agent_id}")
+async def cancel_scheduled_job(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    Cancel a scheduled job by agent_id.
+    Removes the APScheduler job and clears schedule fields on the agent.
+    """
+    from app.models.agent import Agent
+    from app.services.scheduler_service import remove_agent_job
+
+    remove_agent_job(agent_id)
+
+    agent = await db.get(Agent, agent_id)
+    if agent:
+        agent.schedule = None
+        agent.schedule_prompt = None
+        await db.commit()
+
+    return {"detail": f"Schedule cancelled for agent_id={agent_id}"}

@@ -295,6 +295,129 @@ function MessageTypeTag({ type }) {
 }
 
 /* ─────────────────────────────────────────────
+   Scheduled Jobs Panel
+───────────────────────────────────────────── */
+function ScheduledJobsPanel() {
+  const [jobs, setJobs] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(null);
+
+  async function loadJobs() {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/workflows/scheduled-jobs`);
+      setJobs(res.data);
+    } catch {
+      setJobs([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function cancelJob(agentId) {
+    if (!window.confirm("Cancel this scheduled job?")) return;
+    setCancelling(agentId);
+    try {
+      await axios.delete(`${API_BASE}/workflows/scheduled-jobs/${agentId}`);
+      await loadJobs();
+    } finally {
+      setCancelling(null);
+    }
+  }
+
+  useEffect(() => {
+    loadJobs();
+    const interval = setInterval(loadJobs, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="panel" style={{ height: "100%" }}>
+      <div className="panel-header">
+        <div>
+          <div className="eyebrow">Automation</div>
+          <h2>Scheduled Jobs</h2>
+        </div>
+        <button
+          onClick={loadJobs}
+          style={{ fontSize: 11, padding: "4px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}
+        >
+          {loading ? "Refreshing..." : "↻ Refresh"}
+        </button>
+      </div>
+
+      {jobs.length === 0 && !loading && (
+        <div style={{ padding: "24px 0", textAlign: "center" }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>🗓</div>
+          <div className="muted-small" style={{ fontSize: 12 }}>No scheduled jobs active.</div>
+          <div className="muted-small" style={{ fontSize: 11, marginTop: 4, maxWidth: 260, margin: "4px auto 0" }}>
+            Ask the orchestrator to schedule a task — e.g. <em>"Search for AI news every morning at 9am"</em>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {jobs.map((job) => (
+          <div key={job.job_id} style={{
+            background: "#0f1117",
+            border: "1px solid #1affd530",
+            borderRadius: 8,
+            padding: "12px 14px",
+            position: "relative",
+          }}>
+            {/* Header row */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 6px", fontWeight: 700, letterSpacing: "0.05em" }}>CRON</span>
+                  <code style={{ fontSize: 12, color: "#f59e0b", background: "#f59e0b15", borderRadius: 4, padding: "1px 6px" }}>{job.cron}</code>
+                </div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>{job.agent_name}</div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>agent_id: {job.agent_id}</div>
+              </div>
+              <button
+                onClick={() => cancelJob(job.agent_id)}
+                disabled={cancelling === job.agent_id}
+                style={{
+                  flexShrink: 0,
+                  fontSize: 11, padding: "4px 10px", borderRadius: 4,
+                  border: "1px solid #ef444430", background: "transparent",
+                  color: cancelling === job.agent_id ? "#6b7280" : "#ef4444",
+                  cursor: cancelling === job.agent_id ? "default" : "pointer",
+                }}
+              >
+                {cancelling === job.agent_id ? "Cancelling..." : "Cancel"}
+              </button>
+            </div>
+
+            {/* Prompt preview */}
+            {job.prompt && (
+              <div style={{
+                fontSize: 12, color: "#9ca3af",
+                background: "#1a1f2e", borderRadius: 5,
+                padding: "6px 8px", marginBottom: 6,
+                overflow: "hidden", textOverflow: "ellipsis",
+                display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+              }}>
+                {job.prompt}
+              </div>
+            )}
+
+            {/* Next run */}
+            {job.next_run_utc && (
+              <div style={{ fontSize: 10, color: "#6b7280", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ color: "#22c55e" }}>⏰</span>
+                Next run: {new Date(job.next_run_utc).toLocaleString()}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
    App
 ───────────────────────────────────────────── */
 export default function App() {
@@ -306,6 +429,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [runError, setRunError] = useState("");
   const [editingAgent, setEditingAgent] = useState(null);
+
+  // Bottom panel tab: "runs" | "messages" | "monitor" | "scheduled"
+  const [bottomTab, setBottomTab] = useState("runs");
 
   const [templates, setTemplates] = useState([]);
   const [activeTemplateId, setActiveTemplateId] = useState(null);
@@ -351,9 +477,6 @@ export default function App() {
     setSelectedRunId(runId);
   }
 
-  // FIX: loadTemplates only populates the list — it never auto-loads onto
-  // the canvas on startup (which caused the "No matching agents" alert when
-  // agents hadn't loaded yet). Users click "Load" manually.
   async function loadTemplates() {
     try {
       const res = await axios.get(`${API_BASE}/workflow-templates`);
@@ -457,7 +580,6 @@ export default function App() {
   }
 
   async function loadTemplate(tpl) {
-    // Always fetch fresh agents so we get the latest IDs
     const currentAgents = await loadAgents();
     let resolvedIds;
     if (tpl.is_builtin) {
@@ -512,8 +634,12 @@ export default function App() {
     try {
       const agent_ids = nodes.map((n) => parseInt(n.id, 10));
       const edgePayload = edges.map((e) => ({ source: e.source, target: e.target }));
-      await axios.post(`${API_BASE}/workflows/demo-run`, { user_input: workflowInput, agent_ids, edges: edgePayload });
+      const res = await axios.post(`${API_BASE}/workflows/demo-run`, { user_input: workflowInput, agent_ids, edges: edgePayload });
       await loadRuns();
+      // If a schedule was just registered, switch to the Scheduled Jobs tab
+      if (res.data?.schedule_intent) {
+        setBottomTab("scheduled");
+      }
     } catch (err) {
       setRunError(err?.response?.data?.detail || "Workflow run failed. Check backend logs.");
     } finally { setLoading(false); }
@@ -535,6 +661,22 @@ export default function App() {
   }, []);
 
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
+
+  // ── Tab button style helper ──
+  function tabStyle(tab) {
+    const active = bottomTab === tab;
+    return {
+      fontSize: 12, fontWeight: active ? 700 : 500,
+      padding: "6px 14px", borderRadius: "6px 6px 0 0",
+      border: active ? "1px solid #2d3348" : "1px solid transparent",
+      borderBottom: active ? "1px solid #0f1117" : "1px solid transparent",
+      background: active ? "#0f1117" : "transparent",
+      color: active ? "#e8e8e8" : "#6b7280",
+      cursor: "pointer",
+      marginBottom: -1,
+      transition: "color 0.15s",
+    };
+  }
 
   return (
     <div className="app-shell">
@@ -624,7 +766,6 @@ export default function App() {
               const isOrch = agent.role === "orchestrator";
               return (
                 <div className="list-item" key={agent.id} style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                  {/* Top row: name + buttons — FIX: min-width:0 on name so it truncates */}
                   <div style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", gap: 8, minWidth: 0 }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
@@ -632,10 +773,12 @@ export default function App() {
                         {isOrch && (
                           <span style={{ flexShrink: 0, fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>
                         )}
+                        {agent.schedule && (
+                          <span title={`Scheduled: ${agent.schedule}`} style={{ flexShrink: 0, fontSize: 9, background: "#22c55e18", color: "#22c55e", border: "1px solid #22c55e35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>⏰ SCHED</span>
+                        )}
                       </div>
                       <div className="muted-small">{agent.role} · {agent.model?.split("-")[0] ?? ""}</div>
                     </div>
-                    {/* Buttons: flex-shrink:0 so they never get squeezed */}
                     <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
                       <button onClick={() => setEditingAgent(agent)} title="Edit agent"
                         style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #1affd530", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
@@ -754,116 +897,4 @@ export default function App() {
                             {isActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1affd5", display: "inline-block", flexShrink: 0 }} />}
                             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
                             {tpl.is_builtin === 1 && <span style={{ flexShrink: 0, fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
-                          </div>
-                          {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.description}</div>}
-                        </div>
-                        <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                          <button onClick={() => loadTemplate(tpl)}
-                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
-                            Load
-                          </button>
-                          {tpl.is_builtin !== 1 && (
-                            <button onClick={() => deleteTemplate(tpl.id)}
-                              style={{ fontSize: 11, padding: "3px 7px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
-                              🗑
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {templates.length === 0 && <div className="muted-small" style={{ fontSize: 11 }}>No templates yet.</div>}
-                </div>
-              </div>
-              {templateMsg && (
-                <div style={{ fontSize: 11, marginBottom: 8, padding: "5px 8px", borderRadius: 5,
-                  color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171",
-                  background: templateMsg.startsWith("✓") ? "#22c55e15" : "#f8717115",
-                  border: `1px solid ${templateMsg.startsWith("✓") ? "#22c55e30" : "#f8717130"}` }}>
-                  {templateMsg}
-                </div>
-              )}
-              <div style={{ borderTop: "1px solid #2d3348", paddingTop: 10 }}>
-                <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Save current canvas as template</div>
-                <input placeholder="Workflow name" value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)} style={{ width: "100%", marginBottom: 6 }} />
-                <input placeholder="Description (optional)" value={templateDesc}
-                  onChange={(e) => setTemplateDesc(e.target.value)} style={{ width: "100%", marginBottom: 8 }} />
-                <button className="primary-btn" onClick={saveTemplate} disabled={savingTemplate} style={{ fontSize: 12, padding: "7px 14px" }}>
-                  {savingTemplate ? "Saving..." : "Save as template"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="content-grid">
-
-          {/* ── Workflow Runs ── */}
-          <div className="panel">
-            <div className="panel-header">
-              <div><div className="eyebrow">Persistence</div><h2>Workflow Runs</h2></div>
-            </div>
-            <div className="list">
-              {runs.map((run) => (
-                <button key={run.id} className={`run-card ${selectedRunId === run.id ? "active" : ""}`} onClick={() => loadMessages(run.id)}>
-                  <div className="run-card-top"><strong>Run #{run.id}</strong><span className="badge">{run.status}</span></div>
-                  <div className="muted-small">{run.workflow_name}</div>
-                  <div className="run-input">{run.input_text}</div>
-                  {run.total_tokens != null && (
-                    <div style={{ fontSize: 10, color: "#6b7280", marginTop: 3 }}>
-                      🪙 {run.total_tokens} tokens{run.estimated_cost_usd != null ? ` · $${run.estimated_cost_usd.toFixed(5)}` : ""}
-                    </div>
-                  )}
-                </button>
-              ))}
-              {runs.length === 0 && <div className="muted-small">No runs yet.</div>}
-            </div>
-          </div>
-
-          {/* ── Message History ── */}
-          <div className="panel">
-            <div className="panel-header">
-              <div><div className="eyebrow">Messages</div>
-                <h2>{selectedRun ? `Run #${selectedRun.id} History` : "Select a run"}</h2>
-              </div>
-            </div>
-            <div className="messages">
-              {messages.map((msg) => (
-                <div className="message-card" key={msg.id} style={msg.message_type === "tool_call" ? { borderLeft: "3px solid #f59e0b" } : {}}>
-                  <div className="message-meta">
-                    <strong>{msg.sender}</strong>
-                    <span className="muted-small">{msg.receiver ? `→ ${msg.receiver}` : ""}</span>
-                    <MessageTypeTag type={msg.message_type} />
-                  </div>
-                  <div style={{ fontSize: 13 }}>{msg.content}</div>
-                </div>
-              ))}
-              {selectedRunId && messages.length === 0 && <div className="muted-small">No messages found.</div>}
-            </div>
-          </div>
-
-          {/* ── Live Monitor ── */}
-          <div className="panel">
-            <div className="panel-header">
-              <div><div className="eyebrow">Monitoring</div><h2>Live Event Stream</h2></div>
-            </div>
-            <div className="messages">
-              {liveEvents.map((event, idx) => (
-                <div className="message-card" key={idx} style={event.type === "tool_call" ? { borderLeft: "3px solid #f59e0b" } : {}}>
-                  <div className="message-meta">
-                    <strong>{event.sender}</strong>
-                    <span className="muted-small">{event.receiver ? `→ ${event.receiver}` : ""}</span>
-                    <span className="badge subtle">run #{event.run_id} · {event.type}</span>
-                  </div>
-                  <div style={{ fontSize: 13 }}>{event.content}</div>
-                </div>
-              ))}
-              {liveEvents.length === 0 && <div className="muted-small">Waiting for events...</div>}
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-  );
-}
+    
