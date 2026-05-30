@@ -24,9 +24,9 @@ const AVAILABLE_MODELS = [
   "llama-3.1-70b-specdec",
 ];
 
-/* ───────────────────────────────────────────
+/* ─────────────────────────────────────────────
    Custom Node
-─────────────────────────────────────────── */
+───────────────────────────────────────────── */
 function CustomAgentNode({ data }) {
   const tools = data.tools || [];
   const channels = data.channels || [];
@@ -54,7 +54,7 @@ function CustomAgentNode({ data }) {
           <span style={{ fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700, letterSpacing: "0.04em" }}>ORCHESTRATOR</span>
         )}
       </div>
-      <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2 }}>{data.name}</div>
+      <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{data.name}</div>
       <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{data.role}</div>
       {visibleTools.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
@@ -79,9 +79,9 @@ function CustomAgentNode({ data }) {
 
 const nodeTypes = { agentNode: CustomAgentNode };
 
-/* ───────────────────────────────────────────
+/* ─────────────────────────────────────────────
    Edit Agent Modal
-─────────────────────────────────────────── */
+───────────────────────────────────────────── */
 function EditAgentModal({ agent, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: agent.name,
@@ -129,7 +129,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
     } finally { setSaving(false); }
   }
 
-  // Close on backdrop click
   function handleBackdrop(e) { if (e.target === e.currentTarget) onClose(); }
 
   return (
@@ -143,7 +142,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
         padding: 24, width: "min(560px, 95vw)", maxHeight: "90vh",
         overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
       }}>
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div>
             <div style={{ fontSize: 10, color: "#1affd5", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>Edit Agent</div>
@@ -153,13 +151,10 @@ function EditAgentModal({ agent, onClose, onSaved }) {
         </div>
 
         <div className="form-grid">
-          {/* Name */}
           <div>
             <div className="muted-small" style={{ marginBottom: 4 }}>Name</div>
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </div>
-
-          {/* Role */}
           <div>
             <div className="muted-small" style={{ marginBottom: 4 }}>Role</div>
             <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, channels: [] })}
@@ -168,16 +163,12 @@ function EditAgentModal({ agent, onClose, onSaved }) {
               <option value="orchestrator">Orchestrator</option>
             </select>
           </div>
-
-          {/* System Prompt */}
           <div>
             <div className="muted-small" style={{ marginBottom: 4 }}>System Prompt</div>
             <textarea rows={5} value={form.system_prompt}
               onChange={(e) => setForm({ ...form, system_prompt: e.target.value })}
               style={{ resize: "vertical" }} />
           </div>
-
-          {/* Model */}
           <div>
             <div className="muted-small" style={{ marginBottom: 4 }}>Model</div>
             <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
@@ -185,8 +176,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
               {AVAILABLE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
-
-          {/* Tools */}
           <div>
             <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -198,8 +187,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
               ))}
             </div>
           </div>
-
-          {/* Channels — orchestrator only */}
           {isOrch && (
             <div>
               <div className="muted-small" style={{ marginBottom: 6 }}>Channels <span style={{ color: "#f59e0b", fontSize: 10 }}>(orchestrator only)</span></div>
@@ -213,8 +200,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
               </div>
             </div>
           )}
-
-          {/* Guardrails */}
           <div>
             <div className="muted-small" style={{ marginBottom: 4 }}>Forbidden Topics <span style={{ color: "#6b7280", fontSize: 10 }}>(comma-separated)</span></div>
             <input value={form.forbidden_topics} onChange={(e) => setForm({ ...form, forbidden_topics: e.target.value })} placeholder="e.g. violence, politics" />
@@ -231,8 +216,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
                 onChange={(e) => setForm({ ...form, max_output_chars: e.target.value })} placeholder="optional" />
             </div>
           </div>
-
-          {/* Toggles */}
           <div style={{ display: "flex", gap: 16 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
@@ -248,7 +231,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
         {error && (
           <div style={{ color: "#f87171", fontSize: 12, marginTop: 12, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {error}</div>
         )}
-
         <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
           <button onClick={onClose}
             style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer", fontSize: 13 }}>
@@ -263,9 +245,9 @@ function EditAgentModal({ agent, onClose, onSaved }) {
   );
 }
 
-/* ───────────────────────────────────────────
+/* ─────────────────────────────────────────────
    Helpers
-─────────────────────────────────────────── */
+───────────────────────────────────────────── */
 function parseList(val) {
   if (Array.isArray(val)) return val;
   try { return JSON.parse(val || "[]"); } catch { return []; }
@@ -312,9 +294,9 @@ function MessageTypeTag({ type }) {
   );
 }
 
-/* ───────────────────────────────────────────
+/* ─────────────────────────────────────────────
    App
-─────────────────────────────────────────── */
+───────────────────────────────────────────── */
 export default function App() {
   const [agents, setAgents] = useState([]);
   const [runs, setRuns] = useState([]);
@@ -323,7 +305,7 @@ export default function App() {
   const [liveEvents, setLiveEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [runError, setRunError] = useState("");
-  const [editingAgent, setEditingAgent] = useState(null); // agent object being edited
+  const [editingAgent, setEditingAgent] = useState(null);
 
   const [templates, setTemplates] = useState([]);
   const [activeTemplateId, setActiveTemplateId] = useState(null);
@@ -369,20 +351,21 @@ export default function App() {
     setSelectedRunId(runId);
   }
 
+  // FIX: loadTemplates only populates the list — it never auto-loads onto
+  // the canvas on startup (which caused the "No matching agents" alert when
+  // agents hadn't loaded yet). Users click "Load" manually.
   async function loadTemplates() {
-    const res = await axios.get(`${API_BASE}/workflow-templates`);
-    const data = res.data;
-    setTemplates(data);
-    if (!data.length) return;
-    const lastId = sessionStorage.getItem("lastTemplateId");
-    const toLoad = (lastId && data.find((t) => String(t.id) === lastId)) ?? data[0];
-    if (toLoad) await loadTemplate(toLoad, data);
+    try {
+      const res = await axios.get(`${API_BASE}/workflow-templates`);
+      setTemplates(res.data);
+    } catch {
+      // silently ignore — templates are optional
+    }
   }
 
-  // ── After an agent edit: refresh list + refresh canvas nodes in-place ──
+  // ── After an agent edit: refresh list + update canvas nodes in-place ──
   async function handleAgentSaved() {
     const fetched = await loadAgents();
-    // Update canvas node data if that agent is on the canvas
     setNodes((nds) => nds.map((n) => {
       const updated = fetched.find((a) => String(a.id) === n.id);
       if (!updated) return n;
@@ -473,8 +456,9 @@ export default function App() {
     } finally { setSavingTemplate(false); }
   }
 
-  async function loadTemplate(tpl, agentOverride) {
-    const currentAgents = agentOverride ?? (agents.length ? agents : await loadAgents());
+  async function loadTemplate(tpl) {
+    // Always fetch fresh agents so we get the latest IDs
+    const currentAgents = await loadAgents();
     let resolvedIds;
     if (tpl.is_builtin) {
       const nameToId = Object.fromEntries(currentAgents.map((a) => [a.name.toLowerCase(), a.id]));
@@ -484,7 +468,10 @@ export default function App() {
     } else {
       resolvedIds = tpl.agent_ids;
     }
-    if (!resolvedIds.length) { alert("No matching agents found for this template. Create the agents first."); return; }
+    if (!resolvedIds.length) {
+      setTemplateMsg(`⚠ No matching agents found for "${tpl.name}". Create the agents first.`);
+      return;
+    }
     const tplAgents = resolvedIds.map((id) => currentAgents.find((a) => a.id === id)).filter(Boolean);
     const { nodes: n, edges: e } = buildHubLayout(tplAgents);
     if (!tpl.is_builtin && tpl.edges && tpl.edges.length > 0) {
@@ -497,7 +484,8 @@ export default function App() {
       setNodes(n); setEdges(e);
     }
     setActiveTemplateId(tpl.id);
-    sessionStorage.setItem("lastTemplateId", String(tpl.id));
+    setTemplateMsg(`✓ Loaded "${tpl.name}" onto canvas.`);
+    setTimeout(() => setTemplateMsg(""), 3000);
   }
 
   async function deleteTemplate(id) {
@@ -506,12 +494,11 @@ export default function App() {
       await axios.delete(`${API_BASE}/workflow-templates/${id}`);
       if (activeTemplateId === id) {
         setActiveTemplateId(null);
-        sessionStorage.removeItem("lastTemplateId");
         setNodes([]); setEdges([]);
       }
       await loadTemplates();
     } catch (err) {
-      alert(err?.response?.data?.detail || "Failed to delete template.");
+      setTemplateMsg(err?.response?.data?.detail || "Failed to delete template.");
     }
   }
 
@@ -532,7 +519,11 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { loadAgents(); loadRuns(); loadTemplates(); }, []);
+  useEffect(() => {
+    loadAgents();
+    loadRuns();
+    loadTemplates();
+  }, []);
 
   useEffect(() => {
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/monitor");
@@ -547,7 +538,6 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {/* Edit Agent Modal */}
       {editingAgent && (
         <EditAgentModal
           agent={editingAgent}
@@ -634,30 +624,31 @@ export default function App() {
               const isOrch = agent.role === "orchestrator";
               return (
                 <div className="list-item" key={agent.id} style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                  <div style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <strong>{agent.name}</strong>
+                  {/* Top row: name + buttons — FIX: min-width:0 on name so it truncates */}
+                  <div style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+                        <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, display: "block" }}>{agent.name}</strong>
                         {isOrch && (
-                          <span style={{ fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>
+                          <span style={{ flexShrink: 0, fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>
                         )}
                       </div>
                       <div className="muted-small">{agent.role} · {agent.model?.split("-")[0] ?? ""}</div>
                     </div>
-                    <div style={{ display: "flex", gap: 5 }}>
-                      {/* ✏ Edit button */}
+                    {/* Buttons: flex-shrink:0 so they never get squeezed */}
+                    <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
                       <button onClick={() => setEditingAgent(agent)} title="Edit agent"
                         style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #1affd530", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
                         ✏
                       </button>
                       {!inGraph ? (
                         <button onClick={() => addAgentToWorkflow(agent)}
-                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
+                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer", whiteSpace: "nowrap" }}>
                           + Add
                         </button>
                       ) : (
                         <button onClick={() => removeAgentFromWorkflow(agent.id)}
-                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #f87171", background: "transparent", color: "#f87171", cursor: "pointer" }}>
+                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #f87171", background: "transparent", color: "#f87171", cursor: "pointer", whiteSpace: "nowrap" }}>
                           − Remove
                         </button>
                       )}
@@ -735,7 +726,7 @@ export default function App() {
               {runError && (
                 <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {runError}</div>
               )}
-              <button className="primary-btn" onClick={runWorkflow} disabled={loading}>
+              <button className="primary-btn" onClick={runWorkflow} disabled={loading} style={{ marginTop: 10 }}>
                 {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
               </button>
             </div>
@@ -756,16 +747,17 @@ export default function App() {
                         borderRadius: 6, padding: "7px 10px",
                         border: isActive ? "1px solid #1affd540" : "1px solid #2d3348",
                         transition: "border-color 0.2s, background 0.2s",
+                        gap: 8, minWidth: 0,
                       }}>
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                             {isActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1affd5", display: "inline-block", flexShrink: 0 }} />}
-                            {tpl.name}
-                            {tpl.is_builtin === 1 && <span style={{ fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
+                            {tpl.is_builtin === 1 && <span style={{ flexShrink: 0, fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>}
                           </div>
-                          {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>{tpl.description}</div>}
+                          {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.description}</div>}
                         </div>
-                        <div style={{ display: "flex", gap: 5 }}>
+                        <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
                           <button onClick={() => loadTemplate(tpl)}
                             style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
                             Load
@@ -783,15 +775,20 @@ export default function App() {
                   {templates.length === 0 && <div className="muted-small" style={{ fontSize: 11 }}>No templates yet.</div>}
                 </div>
               </div>
+              {templateMsg && (
+                <div style={{ fontSize: 11, marginBottom: 8, padding: "5px 8px", borderRadius: 5,
+                  color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171",
+                  background: templateMsg.startsWith("✓") ? "#22c55e15" : "#f8717115",
+                  border: `1px solid ${templateMsg.startsWith("✓") ? "#22c55e30" : "#f8717130"}` }}>
+                  {templateMsg}
+                </div>
+              )}
               <div style={{ borderTop: "1px solid #2d3348", paddingTop: 10 }}>
                 <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Save current canvas as template</div>
                 <input placeholder="Workflow name" value={templateName}
                   onChange={(e) => setTemplateName(e.target.value)} style={{ width: "100%", marginBottom: 6 }} />
                 <input placeholder="Description (optional)" value={templateDesc}
                   onChange={(e) => setTemplateDesc(e.target.value)} style={{ width: "100%", marginBottom: 8 }} />
-                {templateMsg && (
-                  <div style={{ fontSize: 11, marginBottom: 6, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171" }}>{templateMsg}</div>
-                )}
                 <button className="primary-btn" onClick={saveTemplate} disabled={savingTemplate} style={{ fontSize: 12, padding: "7px 14px" }}>
                   {savingTemplate ? "Saving..." : "Save as template"}
                 </button>
@@ -862,7 +859,8 @@ export default function App() {
                   <div style={{ fontSize: 13 }}>{event.content}</div>
                 </div>
               ))}
-              {liveEvents.length === 0 && <div className="muted-small">Waiting for events...</div>}</div>
+              {liveEvents.length === 0 && <div className="muted-small">Waiting for events...</div>}
+            </div>
           </div>
         </section>
       </main>
