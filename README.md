@@ -7,7 +7,7 @@ A full-stack multi-agent orchestration platform. Create agents, wire them into w
 ## What It Does
 
 - **Agent management** — create, edit, and delete agents with custom system prompts, models, tools, guardrails, skills, and interaction rules
-- **Visual workflow canvas** — drag agents onto a ReactFlow canvas and wire them up; the selected agent list is the live workflow definition
+- **Visual workflow canvas** — drag agents onto a ReactFlow canvas and wire them up; tool badges are shown directly on each canvas node (⚡ teal for orchestrator-pinned tools, 🔧 amber for specialist tools)
 - **LangGraph execution** — a LangGraph `StateGraph` orchestrates agents with three routing modes: single specialist, parallel fanout, and sequential pipeline
 - **Pipeline routing** — for research-then-summarise queries, the Researcher's output is automatically passed to the Summariser as input (true inter-agent message passing)
 - **Retry / feedback loop** — if a specialist returns an empty or guardrail-blocked response, the graph re-routes back to the orchestrator (up to 2 retries)
@@ -243,12 +243,51 @@ User input (UI or Telegram)
 The PIPELINE mode demonstrates true agent-to-agent communication:
 
 1. **Orchestrator** detects intent (e.g. *"research LangGraph and give me a brief"*) → sets `pipeline_mode=True`, routes to Researcher
-2. **Researcher** runs on `user_input`, stores detailed findings in `state["research_notes"]`, does NOT surface output yet
+2. **Researcher** runs on `user_input`, stores detailed findings in `state["research_notes"]`
 3. **pipeline_handoff_node** advances the queue, sets `pipeline_stage="summarise"`
 4. **Summariser** receives `research_notes` as its input (not raw `user_input`) → produces a structured TL;DR brief
 5. Final response is the Summariser's brief — the Researcher's raw output is internal
 
-This is the key difference from FANOUT: in FANOUT both agents get `user_input` and run independently. In PIPELINE, Agent B gets Agent A's output.
+This is the key difference from FANOUT: in FANOUT both agents get `user_input` independently. In PIPELINE, Agent B gets Agent A's output.
+
+### Built-in Agents
+
+| Agent | Role | Tools | Skills |
+|---|---|---|---|
+| `ResearchOrchestrator` | orchestrator | ⚡ `calculator`, ⚡ `datetime` | routing, intent_detection, pipeline_orchestration |
+| `Researcher` | agent | 🔧 `web_search`, 🔧 `wikipedia` | web_search, summarisation, fact_checking |
+| `Summariser` | agent | 🔧 `web_search`, 🔧 `wikipedia` | summarisation, content_condensing, structured_briefs |
+| `SupportOrchestrator` | orchestrator | ⚡ `calculator`, ⚡ `datetime` | triage, routing, urgency_detection |
+| `Supporter` | agent | — | customer_support, empathy, communication |
+| `Escalator` | agent | 🔧 `datetime` | escalation, incident_reporting, urgency_classification |
+
+> ⚡ **Orchestrator tools** (`calculator` and `datetime`) are **always active** on both orchestrators and are pinned in the UI — they cannot be removed. These tools are required for UTC timezone arithmetic when scheduling cron jobs.
+
+### Built-in Templates
+
+| Template | Orchestrator | Specialist Agents | Routing |
+|---|---|---|---|
+| **Research Hub** | `ResearchOrchestrator` (⚡ calculator, ⚡ datetime) | `Researcher` (web_search, wikipedia), `Summariser` (web_search, wikipedia) | Factual → Researcher (SINGLE); research+brief → Researcher→Summariser (PIPELINE); compound → both (FANOUT) |
+| **Support Triage** | `SupportOrchestrator` (⚡ calculator, ⚡ datetime) | `Supporter`, `Escalator` (datetime) | Routine → Supporter (SINGLE); urgent/complex → Escalator (SINGLE) |
+
+### Tool Registry
+
+| Tool | What it does | Used by |
+|---|---|---|
+| `datetime` | Returns current UTC date and time | ⚡ Both orchestrators (cron arithmetic), Escalator (timestamps) |
+| `calculator` | Safe `eval` of math expressions using Python `math` module | ⚡ Both orchestrators (UTC offset arithmetic) |
+| `web_search` | DuckDuckGo Instant Answer API (no key required) | Researcher, Summariser |
+| `wikipedia` | Wikipedia REST API summary (~400 chars) | Researcher, Summariser |
+
+### Visual Builder — Tool Badges
+
+Every agent node on the ReactFlow canvas displays its tools inline:
+
+- **⚡ Teal badge** — orchestrator-pinned tools (`calculator`, `datetime`). Always shown, cannot be removed via the edit modal.
+- **🔧 Amber badge** — specialist tools (e.g. `web_search`, `wikipedia`).
+- **📡 Blue badge** — messaging channels (e.g. `telegram`).
+
+This makes the workflow topology immediately readable — you can see at a glance which tools each agent brings to the workflow.
 
 ### Backend (`app/`)
 
@@ -274,210 +313,4 @@ This is the key difference from FANOUT: in FANOUT both agents get `user_input` a
 
 After every specialist run, `retry_check_node` evaluates the output:
 
-- **Empty response** → retry (re-route to orchestrator, which picks a different specialist)
-- **Guardrail refusal** (`[Guardrail] ...` prefix) → retry
-- **Max retries reached** (2×) → graceful error response
-
-On retry, the orchestrator receives the previous output as context so it deliberately picks a different approach.
-
-### Scheduled Workflows
-
-Agents support natural-language scheduling via the `schedule` and `schedule_prompt` fields:
-
-- **`schedule`** — UTC cron expression (e.g. `27 12 * * *`). The orchestrator uses its `calculator` and `datetime` tools to convert any user-mentioned timezone (IST, EST, PST, CET, etc.) to UTC precisely.
-- **`schedule_prompt`** — the task text sent to the workflow when the cron fires
-
-Example: user says *"send me a news briefing every day at 9 AM IST"*
-→ Orchestrator computes: 9:00 IST = 9×60 − 330 = 210 min = 3:30 UTC → cron: `30 3 * * *`
-→ Confirmation shows original time and UTC equivalent so the user can verify
-
-### Built-in Templates
-
-| Template | Orchestrator | Agents | Routing |
-|---|---|---|---|
-| **Research Hub** | `ResearchOrchestrator` | `Researcher` (web_search, wikipedia), `Summariser` (web_search, wikipedia) | Factual → Researcher (SINGLE); research+brief → Researcher→Summariser (PIPELINE); compound → both (FANOUT) |
-| **Support Triage** | `SupportOrchestrator` | `Supporter`, `Escalator` (datetime) | Routine → Supporter (SINGLE); urgent/complex → Escalator (SINGLE) |
-
-**Orchestrators** in both templates have `calculator` and `datetime` tools for precise UTC arithmetic during scheduling.
-
-### Tool Registry
-
-| Tool | What it does | Used by |
-|---|---|---|
-| `datetime` | Returns current UTC date and time | Orchestrators (cron arithmetic), Escalator (timestamps) |
-| `calculator` | Safe `eval` of math expressions using Python `math` module | Orchestrators (UTC offset arithmetic) |
-| `web_search` | DuckDuckGo Instant Answer API (no key required) | Researcher, Summariser |
-| `wikipedia` | Wikipedia REST API summary (~400 chars) | Researcher, Summariser |
-
-### Agent Configuration — All 5 Dimensions
-
-The challenge requires agents to be configurable across five dimensions. All five are implemented:
-
-| Dimension | Field(s) | Purpose |
-|---|---|---|
-| **Schedules** | `schedule` (UTC cron), `schedule_prompt` (task text) | When and what the agent runs automatically |
-| **Memory** | `memory_enabled` (bool), `max_iterations` (int) | Whether the orchestrator retains conversation history and how many turns to inject |
-| **Skills** | `skills` (list of strings) | Capability labels injected into the orchestrator's routing prompt for smarter routing |
-| **Interaction Rules** | `interaction_rules` (list of strings) | Behavioural constraints appended to the agent's system prompt on every LLM call |
-| **Guardrails** | `forbidden_topics` (list), `max_output_chars` (int) | Hard limits: keyword-triggered refusal and character cap on output |
-
----
-
-## Project Structure
-
-```
-yuno-agent-platform/
-├── app/
-│   ├── api/
-│   │   ├── agents.py
-│   │   ├── health.py
-│   │   ├── monitor.py
-│   │   ├── telegram.py
-│   │   ├── workflow_templates.py
-│   │   └── workflows.py
-│   ├── core/
-│   │   ├── broadcast.py
-│   │   └── config.py
-│   ├── db/
-│   │   ├── base.py
-│   │   ├── init_db.py
-│   │   └── session.py
-│   ├── models/
-│   │   ├── agent.py
-│   │   ├── workflow_message.py
-│   │   ├── workflow_run.py
-│   │   └── workflow_template.py
-│   ├── runtime/
-│   │   ├── agent_graph.py
-│   │   ├── demo_graph.py
-│   │   ├── llm.py
-│   │   ├── state.py
-│   │   └── tools.py
-│   ├── schemas/
-│   ├── services/
-│   │   ├── agent_service.py
-│   │   ├── memory_service.py
-│   │   ├── run_service.py
-│   │   ├── scheduler_service.py
-│   │   ├── telegram_service.py
-│   │   ├── workflow_service.py
-│   │   └── workflow_template_service.py
-│   └── main.py
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── App.test.jsx
-│   │   └── ...
-│   ├── package.json
-│   └── vite.config.js
-├── tests/
-│   └── test_api.py
-├── Dockerfile.backend
-├── Dockerfile.frontend
-├── docker-compose.yml
-├── nginx.conf
-├── .env.example
-├── requirements.txt
-└── pytest.ini
-```
-
----
-
-## API Reference
-
-### Agents
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/agents` | List all agents |
-| `POST` | `/agents` | Create an agent |
-| `GET` | `/agents/{id}` | Get agent by ID |
-| `PATCH` | `/agents/{id}` | Update an agent |
-| `DELETE` | `/agents/{id}` | Delete an agent |
-
-### Workflows
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/workflows/demo-run` | Execute a workflow (requires ≥ 2 agents) |
-| `GET` | `/workflows/runs` | List run history (default limit 50) |
-| `GET` | `/workflows/runs/{id}/messages` | Get message log for a run |
-
-### Templates
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/workflow-templates` | List all templates |
-| `POST` | `/workflow-templates` | Create a custom template |
-| `DELETE` | `/workflow-templates/{id}` | Delete a template (built-ins are protected) |
-
-### Other
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Root endpoint |
-| `GET` | `/health` | Health check |
-| `WS` | `/ws/monitor` | WebSocket live event stream |
-| `POST` | `/telegram/webhook` | Telegram webhook receiver |
-
----
-
-## Running Tests
-
-### Backend
-
-```bash
-python -m pytest tests/test_api.py -v
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm run test:run
-```
-
----
-
-## Token Usage & Cost Tracking
-
-Every workflow run records `prompt_tokens`, `completion_tokens`, `total_tokens`, and `estimated_cost_usd`:
-
-| Model | Input (per 1k) | Output (per 1k) |
-|---|---|---|
-| `llama-3.3-70b-versatile` | $0.00059 | $0.00079 |
-| `llama-3.1-8b-instant` | $0.00005 | $0.00008 |
-| `mixtral-8x7b-32768` | $0.00024 | $0.00024 |
-| `gemma2-9b-it` | $0.00020 | $0.00020 |
-
----
-
-## Telegram Bot Flow
-
-1. Set your bot webhook (see **Telegram Webhook Setup** above)
-2. Send a message — greetings are handled inline; task prompts trigger a full workflow run
-3. The bot replies with the final response from the specialist agent
-4. The run is persisted and visible in the dashboard run history
-
----
-
-## Adding New Workflow Templates
-
-Add an entry to `BUILTIN_TEMPLATES` and `BUILTIN_AGENTS` in `app/db/init_db.py`, then restart the backend. The platform upserts on every startup so no DB wipe is needed.
-
-For custom templates via the API, `POST /workflow-templates` with:
-```json
-{
-  "name": "My Template",
-  "description": "What it does",
-  "agent_ids": ["AgentA", "AgentB"],
-  "edges": [{"source": "AgentA", "target": "AgentB"}]
-}
-```
-
-## Adding a New Messaging Channel
-
-1. Create `app/api/<channel>.py` with a webhook receiver endpoint
-2. Create `app/services/<channel>_service.py` with send/receive logic
-3. Register the router in `app/main.py`
-4. Add the channel name to the `channels` field on whichever agents should be reachable via it
+- **Empty response** → retry (re-route to or
