@@ -8,12 +8,14 @@ A full-stack multi-agent orchestration platform. Create agents, wire them into w
 
 - **Agent management** — create, edit, and delete agents with custom system prompts, models, tools, guardrails, skills, and interaction rules
 - **Visual workflow canvas** — drag agents onto a ReactFlow canvas and wire them up; the selected agent list is the live workflow definition
-- **LangGraph execution** — an orchestrator agent uses LLM-based routing to select a specialist agent; the specialist runs with optional tool calls
-- **Retry / feedback loop** — if a specialist returns an empty or guardrail-blocked response, the graph automatically routes back to the orchestrator (up to 2 retries), which re-routes to a different or better-instructed specialist
+- **LangGraph execution** — a LangGraph `StateGraph` orchestrates agents with three routing modes: single specialist, parallel fanout, and sequential pipeline
+- **Pipeline routing** — for research-then-summarise queries, the Researcher's output is automatically passed to the Summariser as input (true inter-agent message passing)
+- **Retry / feedback loop** — if a specialist returns an empty or guardrail-blocked response, the graph re-routes back to the orchestrator (up to 2 retries)
 - **Built-in templates** — two pre-seeded workflows (*Research Hub*, *Support Triage*) load on first startup
 - **Run history** — every workflow execution is persisted with full message logs, token usage, and estimated cost
 - **Live monitoring** — WebSocket stream (`/ws/monitor`) broadcasts real-time execution events to the dashboard
 - **Telegram integration** — send a task to the bot, it runs the workflow and replies with the result
+- **Scheduled workflows** — tell the bot "run this every day at 9 AM IST" and the platform converts to UTC and registers a recurring cron job automatically
 
 ---
 
@@ -171,7 +173,7 @@ The stack runs as two containers orchestrated by `docker-compose.yml`:
 ```
 
 - **`Dockerfile.backend`** — installs Python deps, copies `app/`, mounts SQLite at `/data/yuno.db` via a named volume
-- **`Dockerfile.frontend`** — two-stage build: Node 20 builds the Vite app (with `VITE_API_BASE` baked in at build time), then nginx serves the static output
+- **`Dockerfile.frontend`** — two-stage build: Node 20 builds the Vite app, then nginx serves the static output
 - **`nginx.conf`** — serves static assets with long-cache headers, SPA fallback for all routes
 - The backend has a healthcheck (`GET /health`) — the frontend container waits for it before starting
 
@@ -179,30 +181,33 @@ The stack runs as two containers orchestrated by `docker-compose.yml`:
 
 ## Manual Setup (Local Development)
 
-Use this if you want hot-reload on both frontend and backend simultaneously.
-
-### Backend
-
 ```bash
+# Backend
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
-# → http://127.0.0.1:8000
-```
 
-### Frontend
-
-```bash
+# Frontend (separate terminal)
 cd frontend
 npm install
 npm run dev
-# → http://localhost:5173
 ```
 
 ---
 
 ## Architecture
+
+### Routing Modes
+
+The orchestrator LLM analyses every user request and selects one of four routing modes:
+
+| Mode | When Used | Flow |
+|---|---|---|
+| **SINGLE** | One specialist can handle the full query | `Orchestrator → Specialist → END` |
+| **FANOUT** | Compound query needing multiple independent agents | `Orchestrator → [AgentA ∥ AgentB] → merge → END` |
+| **PIPELINE** | Research-then-summarise: second agent needs first agent's output | `Orchestrator → Researcher → handoff → Summariser → END` |
+| **SCHEDULE** | User wants a recurring task | `Orchestrator → register cron → END` |
 
 ### Execution Flow
 
@@ -210,84 +215,111 @@ npm run dev
 User input (UI or Telegram)
         │
         ▼
-  orchestrator_node  ←  loaded from DB by role="orchestrator"
-  (LLM router — returns JSON {target, reason})
-        │
-        ▼
-  specialist_node    ←  one of N agents on the canvas
-  (runs with tool calls if needed)
-        │
-        ▼
-  retry_check_node
-  (empty / guardrail-blocked response?)
-        │
-        ├── needs_retry=True  ──▶  orchestrator_node  (re-routes, up to 2×)
-        │
-        └── needs_retry=False ──▶  guardrails check
-                                        │
-                                        ▼
-                              response + token usage persisted to DB
+  orchestrator_node  ←─────────────────────────────────────┐
+  (LLM router — detects mode, uses calculator/datetime      │
+   tools for UTC cron arithmetic)                           │
+        │                                                   │
+        ├── SCHEDULE ──▶ schedule_end_node ──▶ END          │
+        │                                                   │
+        ├── SINGLE ────▶ specialist_node                    │
+        │                      │                           │
+        ├── FANOUT ────▶ fanout_node (parallel)             │
+        │                      │                           │
+        └── PIPELINE ──▶ Researcher                         │
+                               │                           │
+                        pipeline_handoff_node              │
+                        (injects research_notes)           │
+                               │                           │
+                          Summariser                       │
+                               │                           │
+                        retry_check_node                   │
+                        (empty/guardrail?) ── needs_retry ─┘
+                               │
+                               └── response + token usage persisted to DB
 ```
+
+### Pipeline Pattern (Inter-Agent Message Passing)
+
+The PIPELINE mode demonstrates true agent-to-agent communication:
+
+1. **Orchestrator** detects intent (e.g. *"research LangGraph and give me a brief"*) → sets `pipeline_mode=True`, routes to Researcher
+2. **Researcher** runs on `user_input`, stores detailed findings in `state["research_notes"]`, does NOT surface output yet
+3. **pipeline_handoff_node** advances the queue, sets `pipeline_stage="summarise"`
+4. **Summariser** receives `research_notes` as its input (not raw `user_input`) → produces a structured TL;DR brief
+5. Final response is the Summariser's brief — the Researcher's raw output is internal
+
+This is the key difference from FANOUT: in FANOUT both agents get `user_input` and run independently. In PIPELINE, Agent B gets Agent A's output.
 
 ### Backend (`app/`)
 
 | Path | Responsibility |
 |---|---|
-| `main.py` | FastAPI app, CORS for `localhost:5173`, lifespan runs DB init and Telegram setup |
+| `main.py` | FastAPI app, CORS, lifespan: DB init + Telegram setup + scheduler startup |
 | `api/agents.py` | Full CRUD: `GET/POST /agents`, `GET/PATCH/DELETE /agents/{id}` |
 | `api/workflows.py` | `POST /workflows/demo-run`, `GET /workflows/runs`, `GET /workflows/runs/{id}/messages` |
-| `api/workflow_templates.py` | `GET/POST /workflow-templates`, `DELETE /workflow-templates/{id}` (built-ins protected) |
-| `api/monitor.py` | WebSocket `/ws/monitor` — broadcasts run events via in-memory queue |
+| `api/workflow_templates.py` | `GET/POST /workflow-templates`, `DELETE /workflow-templates/{id}` |
+| `api/monitor.py` | WebSocket `/ws/monitor` — broadcasts run events |
 | `api/telegram.py` | Telegram webhook receiver |
 | `api/health.py` | Health check endpoint |
-| `runtime/agent_graph.py` | LangGraph `StateGraph` — orchestrator + specialist nodes, retry/feedback loop, guardrails, token tracking |
-| `runtime/tools.py` | Tool registry: `datetime`, `calculator`, `web_search` (DuckDuckGo), `wikipedia` |
+| `runtime/agent_graph.py` | LangGraph `StateGraph` — all four routing modes, retry/feedback loop, guardrails, token tracking |
+| `runtime/tools.py` | Tool registry: `datetime`, `calculator`, `web_search`, `wikipedia` |
 | `runtime/llm.py` | `get_llm(model)` — returns a `ChatGroq` instance |
-| `runtime/state.py` | `WorkflowState` TypedDict and `TokenUsage` dataclass |
-| `db/init_db.py` | Creates tables, seeds 5 built-in agents + 2 built-in templates (idempotent) |
+| `runtime/state.py` | `WorkflowState` TypedDict (includes `pipeline_mode`, `pipeline_stage`, `pipeline_queue`) |
+| `db/init_db.py` | Creates tables, seeds built-in agents + templates (upserts on restart) |
 | `core/broadcast.py` | Async pub/sub queue for WebSocket monitor events |
+| `services/scheduler_service.py` | APScheduler cron jobs (UTC only) for scheduled agent runs |
+| `services/memory_service.py` | Per-session conversation memory for orchestrator agents |
 
 ### Retry / Feedback Loop
 
-After each specialist run, `retry_check_node` evaluates the output:
+After every specialist run, `retry_check_node` evaluates the output:
 
-- **Empty response** → retry (re-route to a different specialist)
+- **Empty response** → retry (re-route to orchestrator, which picks a different specialist)
 - **Guardrail refusal** (`[Guardrail] ...` prefix) → retry
-- **Max retries reached** (2×) → pass through; if still empty, returns a graceful error
+- **Max retries reached** (2×) → graceful error response
 
-On retry, the orchestrator receives the previous specialist's output as context so it can deliberately choose a *different* specialist — enabling sequential multi-agent handling of compound queries (e.g. *"What is 2+2 and who invented calculus?"* hits Mathematician first, then on retry Researcher handles the history part).
+On retry, the orchestrator receives the previous output as context so it deliberately picks a different approach.
 
-### Built-in Templates (seeded at startup)
+### Scheduled Workflows
 
-| Template | Orchestrator | Specialists | Routing logic |
+Agents support natural-language scheduling via the `schedule` and `schedule_prompt` fields:
+
+- **`schedule`** — UTC cron expression (e.g. `27 12 * * *`). The orchestrator uses its `calculator` and `datetime` tools to convert any user-mentioned timezone (IST, EST, PST, CET, etc.) to UTC precisely.
+- **`schedule_prompt`** — the task text sent to the workflow when the cron fires
+
+Example: user says *"send me a news briefing every day at 9 AM IST"*
+→ Orchestrator computes: 9:00 IST = 9×60 − 330 = 210 min = 3:30 UTC → cron: `30 3 * * *`
+→ Confirmation shows original time and UTC equivalent so the user can verify
+
+### Built-in Templates
+
+| Template | Orchestrator | Agents | Routing |
 |---|---|---|---|
-| **Research Hub** | `ResearchOrchestrator` | `Researcher` (web_search, wikipedia), `Mathematician` (calculator, datetime) | Factual queries → Researcher; numeric/date queries → Mathematician |
-| **Support Triage** | `SupportOrchestrator` | `Supporter`, `Escalator` (datetime) | Routine queries → Supporter; urgent/complex → Escalator |
+| **Research Hub** | `ResearchOrchestrator` | `Researcher` (web_search, wikipedia), `Summariser` (web_search, wikipedia) | Factual → Researcher (SINGLE); research+brief → Researcher→Summariser (PIPELINE); compound → both (FANOUT) |
+| **Support Triage** | `SupportOrchestrator` | `Supporter`, `Escalator` (datetime) | Routine → Supporter (SINGLE); urgent/complex → Escalator (SINGLE) |
+
+**Orchestrators** in both templates have `calculator` and `datetime` tools for precise UTC arithmetic during scheduling.
 
 ### Tool Registry
 
-| Tool | What it does |
-|---|---|
-| `datetime` | Returns current date and time |
-| `calculator` | Safe `eval` of math expressions using Python `math` module |
-| `web_search` | DuckDuckGo Instant Answer API (no key required) |
-| `wikipedia` | Wikipedia REST API summary (~400 chars) |
+| Tool | What it does | Used by |
+|---|---|---|
+| `datetime` | Returns current UTC date and time | Orchestrators (cron arithmetic), Escalator (timestamps) |
+| `calculator` | Safe `eval` of math expressions using Python `math` module | Orchestrators (UTC offset arithmetic) |
+| `web_search` | DuckDuckGo Instant Answer API (no key required) | Researcher, Summariser |
+| `wikipedia` | Wikipedia REST API summary (~400 chars) | Researcher, Summariser |
 
-### Agent Configuration
+### Agent Configuration — All 5 Dimensions
 
-| Field | Purpose |
-|---|---|
-| `system_prompt` | Core instructions for the agent |
-| `model` | Groq model to use |
-| `tools` | List of tool names the agent may call |
-| `channels` | Messaging channels (e.g. `telegram`) |
-| `skills` | Capability labels visible to the orchestrator for routing (e.g. `["summarisation", "code_review"]`) |
-| `interaction_rules` | Behavioural rules injected into the agent's prompt context (e.g. `["always reply in bullet points"]`) |
-| `forbidden_topics` | Guardrail: keywords that trigger a refusal response |
-| `max_output_chars` | Guardrail: hard character cap on output |
-| `memory_enabled` | Whether the orchestrator persists conversation turns for this session |
-| `max_iterations` | How many memory turns to inject as context |
-| `schedule` | Cron expression for scheduled runs (set via natural language) |
+The challenge requires agents to be configurable across five dimensions. All five are implemented:
+
+| Dimension | Field(s) | Purpose |
+|---|---|---|
+| **Schedules** | `schedule` (UTC cron), `schedule_prompt` (task text) | When and what the agent runs automatically |
+| **Memory** | `memory_enabled` (bool), `max_iterations` (int) | Whether the orchestrator retains conversation history and how many turns to inject |
+| **Skills** | `skills` (list of strings) | Capability labels injected into the orchestrator's routing prompt for smarter routing |
+| **Interaction Rules** | `interaction_rules` (list of strings) | Behavioural constraints appended to the agent's system prompt on every LLM call |
+| **Guardrails** | `forbidden_topics` (list), `max_output_chars` (int) | Hard limits: keyword-triggered refusal and character cap on output |
 
 ---
 
@@ -384,7 +416,7 @@ yuno-agent-platform/
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/` | Root endpoint |
-| `GET` | `/health` | Health check (used by Docker healthcheck) |
+| `GET` | `/health` | Health check |
 | `WS` | `/ws/monitor` | WebSocket live event stream |
 | `POST` | `/telegram/webhook` | Telegram webhook receiver |
 
@@ -409,7 +441,7 @@ npm run test:run
 
 ## Token Usage & Cost Tracking
 
-Every workflow run records `prompt_tokens`, `completion_tokens`, `total_tokens`, and `estimated_cost_usd` — calculated per model using Groq's approximate rates:
+Every workflow run records `prompt_tokens`, `completion_tokens`, `total_tokens`, and `estimated_cost_usd`:
 
 | Model | Input (per 1k) | Output (per 1k) |
 |---|---|---|
@@ -426,3 +458,26 @@ Every workflow run records `prompt_tokens`, `completion_tokens`, `total_tokens`,
 2. Send a message — greetings are handled inline; task prompts trigger a full workflow run
 3. The bot replies with the final response from the specialist agent
 4. The run is persisted and visible in the dashboard run history
+
+---
+
+## Adding New Workflow Templates
+
+Add an entry to `BUILTIN_TEMPLATES` and `BUILTIN_AGENTS` in `app/db/init_db.py`, then restart the backend. The platform upserts on every startup so no DB wipe is needed.
+
+For custom templates via the API, `POST /workflow-templates` with:
+```json
+{
+  "name": "My Template",
+  "description": "What it does",
+  "agent_ids": ["AgentA", "AgentB"],
+  "edges": [{"source": "AgentA", "target": "AgentB"}]
+}
+```
+
+## Adding a New Messaging Channel
+
+1. Create `app/api/<channel>.py` with a webhook receiver endpoint
+2. Create `app/services/<channel>_service.py` with send/receive logic
+3. Register the router in `app/main.py`
+4. Add the channel name to the `channels` field on whichever agents should be reachable via it

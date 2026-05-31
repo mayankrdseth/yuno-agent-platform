@@ -1,85 +1,40 @@
 """
 Dynamic multi-agent LangGraph.
 
-Architecture
-------------
-  user_input
-      |
-  orchestrator_node   <- loaded from DB (orchestrator agent)
-      |  1. detect schedule intent (returns {cron, prompt} or null)
-      |  2. if no schedule intent: LLM route to specialist(s)
-      |     - single target  → one specialist runs
-      |     - multiple targets (compound query) → all listed specialists run
-      |       in sequence; their responses are merged before retry_check
-      |  3. build memory_context from last N turns (if memory_enabled)
-      |  4. inject agent skills into routing context for smarter routing
-      |
-  specialist_node     <- one of N saved agents
-      |  receives enriched prompt:
-      |    - memory_context
-      |    - interaction_rules (behavioural constraints injected into system prompt)
-      |    - previous_attempt context (on retry runs)
-      |    - user_input
-      |
-  retry_check_node    <- decides if the response needs to loop back
-      |  - empty response           → retry (re-route to different specialist)
-      |  - guardrail refusal prefix → retry
-      |  - orchestrator explicit    → retry if needs_retry flag set
-      |  - max_retries reached      → pass through to END
-      |
-  response back to caller
+Routing modes
+-------------
+1. SINGLE   — orchestrator picks one specialist
+2. FANOUT   — orchestrator picks multiple specialists (compound query)
+             all run independently on user_input; responses merged
+3. PIPELINE — orchestrator detects a research-then-summarise intent
+             Researcher runs first on user_input, fills state["research_notes"]
+             Summariser then runs on research_notes (not user_input)
+             This demonstrates true inter-agent message passing
+4. SCHEDULE — orchestrator detects cron intent; registers job and returns
 
 Retry / Feedback Loop
 ---------------------
-  After each specialist run, retry_check_node evaluates the output.
-  If a retry is warranted AND retry_count < MAX_RETRIES (2), state["needs_retry"]
-  is set True and the graph edges route back to the orchestrator for re-routing.
-  The orchestrator receives the previous specialist output as additional context
-  so it can pick a *different* specialist — enabling sequential multi-agent handling
-  of compound / nested queries.
+After each specialist (or after fanout/pipeline), retry_check_node evaluates
+the output. Empty or guardrail-blocked responses trigger re-route to
+orchestrator (up to MAX_RETRIES=2).
 
-Multi-Specialist Fan-Out (Compound Queries)
--------------------------------------------
-  The orchestrator can return "targets": ["AgentA", "AgentB"] for compound queries
-  that span multiple domains. Fan-out is bounded by MAX_FANOUT (3).
-
-Skills (Routing Hints)
-----------------------
-  Each specialist's skill labels are injected into the orchestrator's routing
-  prompt for richer signal when multiple specialists could handle a query.
-
-Interaction Rules (Behavioural Constraints)
--------------------------------------------
-  Each agent's interaction_rules list is appended to its system_prompt before
-  the LLM call so the rules are enforced on every response.
-
-Memory
-------
-  Memory is owned by the orchestrator agent (session_key from caller).
-
-Schedule Detection
+Orchestrator Tools
 ------------------
-  The orchestrator LLM returns:
-    {"target": "...", "reason": "...", "schedule_intent": {"cron": "...", "prompt": "..."} | null}
+The orchestrator agent has access to `calculator` and `datetime` tools so it
+can do precise UTC arithmetic for cron scheduling without relying on LLM
+native arithmetic (which is unreliable for half-hour offsets like IST).
 
-  Cron expressions are ALWAYS in UTC.
-  The LLM is instructed to convert any user-mentioned timezone (IST, EST, PST,
-  CET, JST, etc.) to UTC before emitting the cron. This means no server-side
-  timezone config is needed — it works for every timezone automatically.
+Scheduling — UTC only
+---------------------
+All cron expressions are stored and executed in UTC.
+The orchestrator uses the `datetime` tool to get current UTC time and the
+`calculator` tool to do offset arithmetic. The routing prompt instructs it
+to always emit cron in UTC and show the original user time for verification.
 
-  Example: user says "5:39 PM IST"
-    → LLM knows IST = UTC+5:30
-    → 5:39 PM IST = 12:09 PM UTC
-    → emits cron: "9 12 * * *"
-
-Guardrails
-----------
-  - forbidden_topics : list[str]
-  - max_output_chars : int | None
-
-Token tracking
---------------
-  usage_metadata from every LLM call is accumulated into state["token_usage"].
+Skills & Interaction Rules
+--------------------------
+Each specialist's skills are injected into the routing prompt for richer
+routing signal. Interaction rules are appended to each agent's system prompt.
 """
 from __future__ import annotations
 
@@ -99,7 +54,7 @@ from app.runtime.tools import format_tools_for_prompt, get_tools_for_agent
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
-MAX_FANOUT  = 3
+MAX_FANOUT = 3
 _GUARDRAIL_PREFIX = "[Guardrail]"
 
 _COST_PER_1K = {
@@ -114,7 +69,7 @@ _DEFAULT_COST = (0.00020, 0.00020)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _to_usage_dict(obj: Union[TokenUsage, dict, None]) -> dict:
+def _to_usage_dict(obj):
     if obj is None:
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     if isinstance(obj, TokenUsage):
@@ -131,10 +86,7 @@ def _extract_usage(response) -> dict:
     }
 
 
-def _accumulate_usage(
-    existing: Union[TokenUsage, dict, None],
-    new: Union[TokenUsage, dict, None],
-) -> TokenUsage:
+def _accumulate_usage(existing, new) -> TokenUsage:
     a = _to_usage_dict(existing)
     b = _to_usage_dict(new)
     return TokenUsage(
@@ -144,7 +96,7 @@ def _accumulate_usage(
     )
 
 
-def _estimate_cost(model: str, usage: Union[TokenUsage, dict]) -> float:
+def _estimate_cost(model: str, usage) -> float:
     d = _to_usage_dict(usage)
     in_cost, out_cost = _COST_PER_1K.get(model, _DEFAULT_COST)
     return (
@@ -153,12 +105,7 @@ def _estimate_cost(model: str, usage: Union[TokenUsage, dict]) -> float:
     )
 
 
-def _apply_guardrails(
-    text: str,
-    forbidden_topics: list[str],
-    max_output_chars: int | None,
-    agent_name: str,
-) -> str:
+def _apply_guardrails(text, forbidden_topics, max_output_chars, agent_name) -> str:
     if forbidden_topics:
         text_lower = text.lower()
         for topic in forbidden_topics:
@@ -169,7 +116,6 @@ def _apply_guardrails(
                     "as it falls outside my permitted scope."
                 )
     if max_output_chars and len(text) > max_output_chars:
-        logger.info("[%s] output truncated %d -> %d chars.", agent_name, len(text), max_output_chars)
         text = text[:max_output_chars] + " … [truncated]"
     return text
 
@@ -200,12 +146,12 @@ async def run_agent_with_tools(
     user_message: str,
     tool_names: list[str],
     agent_name: str,
-    forbidden_topics: list[str] | None = None,
+    forbidden_topics: list | None = None,
     max_output_chars: int | None = None,
     model: str = "",
     memory_context: str = "",
     previous_attempt: str = "",
-    interaction_rules: list[str] | None = None,
+    interaction_rules: list | None = None,
 ) -> tuple[str, list[dict], TokenUsage]:
     llm = get_llm(model) if model else get_llm()
     tool_calls_log: list[dict] = []
@@ -279,6 +225,7 @@ async def run_agent_with_tools(
 async def llm_route_and_detect(
     user_input: str,
     orchestrator_system_prompt: str,
+    orchestrator_tools: list[str],
     specialist_agents: list[dict],
     model: str = "",
     memory_turns: list[dict] | None = None,
@@ -286,13 +233,16 @@ async def llm_route_and_detect(
     previous_output: str = "",
 ) -> tuple[dict[str, Any], TokenUsage]:
     """
-    Combined orchestrator LLM call:
-      1. Detects schedule intent — cron ALWAYS in UTC, LLM converts any tz
-      2. Routes to one OR multiple specialists
-      3. Builds memory_context to pass to the specialist(s)
-      4. Uses skills labels for richer routing signal
+    Orchestrator LLM call — detects schedule intent, routing mode
+    (single / fanout / pipeline), and uses tools for UTC arithmetic.
+
+    Pipeline mode is triggered when the orchestrator detects the query
+    needs research FOLLOWED BY summarisation — it emits:
+      {"routing_mode": "pipeline", "pipeline": ["Researcher", "Summariser"], ...}
     """
     llm = get_llm(model) if model else get_llm()
+    tools = get_tools_for_agent(orchestrator_tools)
+    usage_acc: TokenUsage = TokenUsage()
 
     agent_list_lines = []
     for a in specialist_agents:
@@ -315,83 +265,119 @@ async def llm_route_and_detect(
         retry_section = (
             f"\n\nPrevious routing attempt: '{previous_routing}' produced this response which "
             f"was insufficient or blocked:\n{previous_output[:300]}\n"
-            "Please route to a DIFFERENT specialist that can better handle this query, "
-            "or the same specialist with a note that they should try harder.\n"
+            "Please route to a DIFFERENT specialist or use a different approach.\n"
+        )
+
+    tool_section = ""
+    if tools:
+        tool_section = (
+            "\n\nYou have access to tools for precise calculation. "
+            "To use a tool, respond with ONLY a JSON object like:\n"
+            '{"tool": "<tool_name>", "input": "<input>"}\n'
+            "Use the `datetime` tool to get current UTC time. "
+            "Use the `calculator` tool for offset arithmetic.\n"
+            f"Available tools:\n{format_tools_for_prompt(orchestrator_tools)}\n"
+            "IMPORTANT: Only use tools when you need them (e.g. for cron scheduling). "
+            "For routing decisions, respond directly with the routing JSON."
         )
 
     routing_prompt = (
         f"{orchestrator_system_prompt}\n"
         f"{history_section}"
-        f"{retry_section}\n"
-        "You are the orchestrator. For the user request below, do THREE things:\n"
-        "1. Check if the user wants to SCHEDULE a recurring task "
-        "(phrases like 'every day', 'every morning', 'weekly', 'remind me at', "
-        "'schedule this', 'run this at', 'every Monday' etc.).\n"
-        "   If yes: extract the cron expression and the actual task prompt.\n"
-        "   CRITICAL: Cron expressions MUST always be in UTC. "
-        "If the user mentions a time in any timezone (IST, EST, PST, CET, JST, AEST, etc.), "
-        "you MUST convert it to UTC before writing the cron. "
-        "Use these offsets: IST=UTC+5:30, EST=UTC-5, PST=UTC-8, CET=UTC+1, "
-        "JST=UTC+9, AEST=UTC+10, BST=UTC+1, CST=UTC-6, MST=UTC-7, "
-        "EDT=UTC-4, PDT=UTC-7, CDT=UTC-5, MDT=UTC-6, SGT=UTC+8, "
-        "HKT=UTC+8, KST=UTC+9, WIB=UTC+7, IST(Israel)=UTC+2.\n"
-        "   Example: '5:39 PM IST' → IST is UTC+5:30 → subtract 5h30m → 12:09 PM UTC → cron: '9 12 * * *'\n"
-        "   Example: '9 AM EST' → EST is UTC-5 → add 5h → 2 PM UTC → cron: '0 14 * * *'\n"
-        "   If no: set schedule_intent to null.\n"
-        "2. Decide if this is a COMPOUND query that clearly requires multiple specialists "
-        "(e.g. 'What is 2+2 AND summarise this article'). "
-        "If compound: list up to 3 agent names in a 'targets' array. "
-        "If single: use 'target' (singular string).\n"
-        "3. Choose the best specialist agent(s) based on their role, skills, and system prompt.\n\n"
-        "Respond ONLY with a JSON object. For single routing:\n"
-        "{\n"
-        '  "target": "<agent_name>",\n'
-        '  "reason": "<short reason>",\n'
-        '  "schedule_intent": null\n'
-        "}\n"
-        "For compound routing:\n"
-        "{\n"
-        '  "targets": ["<agent_name_1>", "<agent_name_2>"],\n'
-        '  "reason": "<short reason>",\n'
-        '  "schedule_intent": null\n'
-        "}\n"
-        "OR if scheduling detected:\n"
-        "{\n"
-        '  "target": "<agent_name>",\n'
-        '  "reason": "<short reason>",\n'
-        '  "schedule_intent": {"cron": "<cron in UTC>", "prompt": "<task to run on schedule>", "original_time": "<what user said>"}\n'
-        "}\n\n"
-        f"Available agents (name: role | skills — system_prompt excerpt):\n{agent_list}\n\n"
+        f"{retry_section}"
+        f"{tool_section}\n\n"
+        "You are the orchestrator. For the user request below, decide the routing mode:\n\n"
+        "ROUTING MODES:\n"
+        "A) SINGLE   — one specialist handles the whole query\n"
+        "B) FANOUT   — multiple specialists each handle a different part independently\n"
+        "C) PIPELINE — the query needs research FIRST, then the research output should be "
+        "summarised/processed by a second agent. Use this when the user asks to "
+        "'research AND summarise', 'find and brief me', 'look up and condense', etc. "
+        "The first agent's output becomes the second agent's input.\n"
+        "D) SCHEDULE — user wants to schedule a recurring task (cron)\n\n"
+        "For SCHEDULE: cron MUST be in UTC. "
+        "Use the `datetime` tool to get current time, then `calculator` for offset arithmetic. "
+        "Steps: (1) get current UTC via datetime tool, (2) convert user time to total minutes "
+        "from midnight, (3) subtract timezone offset in minutes, (4) emit cron.\n"
+        "Example: '5:57 PM IST' → total minutes = 17*60+57=1077, IST offset=330min, "
+        "1077-330=747min → 12h 27m UTC → cron: '27 12 * * *'\n\n"
+        "Respond ONLY with a JSON object matching one of these shapes:\n\n"
+        "SINGLE:   {\"routing_mode\": \"single\",    \"target\": \"<name>\", "
+        "\"reason\": \"...\", \"schedule_intent\": null}\n"
+        "FANOUT:   {\"routing_mode\": \"fanout\",    \"targets\": [\"<name1>\", \"<name2>\"], "
+        "\"reason\": \"...\", \"schedule_intent\": null}\n"
+        "PIPELINE: {\"routing_mode\": \"pipeline\",  \"pipeline\": [\"<first>\", \"<second>\"], "
+        "\"reason\": \"...\", \"schedule_intent\": null}\n"
+        "SCHEDULE: {\"routing_mode\": \"schedule\",  \"target\": \"<name>\", \"reason\": \"...\", "
+        "\"schedule_intent\": {\"cron\": \"<UTC cron>\", \"prompt\": \"<task>\", "
+        "\"original_time\": \"<what user said>\"}}\n\n"
+        f"Available agents:\n{agent_list}\n\n"
         f"User request: {user_input}"
     )
 
-    response = await llm.ainvoke(routing_prompt)
-    usage = _extract_usage(response)
+    # Run orchestrator — may use tools for UTC arithmetic
+    messages: list = [HumanMessage(content=routing_prompt)]
+    response = await llm.ainvoke(messages)
+    usage_acc = _accumulate_usage(usage_acc, _extract_usage(response))
     reply = response.content.strip()
 
+    # Handle tool call from orchestrator (e.g. datetime or calculator for cron)
+    if tools and reply.startswith("{"):
+        try:
+            parsed = json.loads(reply)
+            tool_name  = parsed.get("tool", "")
+            tool_input = parsed.get("input", "")
+            if tool_name and tool_name in tools:
+                logger.info("[orchestrator] tool call: %s(%s)", tool_name, tool_input)
+                tool_result = await tools[tool_name](tool_input)
+                followup_prompt = (
+                    routing_prompt
+                    + f"\n\nTool result from {tool_name}: {tool_result}\n"
+                    "Now provide your final routing JSON."
+                )
+                followup_response = await llm.ainvoke([HumanMessage(content=followup_prompt)])
+                usage_acc = _accumulate_usage(usage_acc, _extract_usage(followup_response))
+                reply = followup_response.content.strip()
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Parse routing JSON
     json_match = re.search(r'\{.*\}', reply, re.DOTALL)
     if json_match:
         try:
             data = json.loads(json_match.group())
-            if "targets" not in data and "target" in data:
-                data["targets"] = [data["target"]]
-            elif "targets" in data and "target" not in data:
-                data["target"] = data["targets"][0] if data["targets"] else ""
-            if "targets" in data:
-                data["targets"] = data["targets"][:MAX_FANOUT]
+            mode = data.get("routing_mode", "single")
+
+            # Normalise all modes to have both target + targets for compat
+            if mode == "pipeline":
+                pipeline = data.get("pipeline", [])
+                data["targets"]        = pipeline
+                data["target"]         = pipeline[0] if pipeline else ""
+                data["pipeline_queue"] = pipeline
+            elif mode == "fanout":
+                targets = data.get("targets", [])
+                data["targets"]        = targets[:MAX_FANOUT]
+                data["target"]         = targets[0] if targets else ""
+                data["pipeline_queue"] = []
+            else:  # single or schedule
+                data["targets"]        = [data.get("target", "")]
+                data["pipeline_queue"] = []
+
             data["memory_context"] = _format_memory_context(memory_turns or [])
-            return data, TokenUsage(**usage)
+            return data, usage_acc
         except json.JSONDecodeError:
             pass
 
     fallback = specialist_agents[0]["name"] if specialist_agents else "fallback"
     return {
-        "target":  fallback,
-        "targets": [fallback],
-        "reason":  "routing fallback",
+        "routing_mode":  "single",
+        "target":        fallback,
+        "targets":       [fallback],
+        "pipeline_queue": [],
+        "reason":        "routing fallback",
         "schedule_intent": None,
         "memory_context":  "",
-    }, TokenUsage(**usage)
+    }, usage_acc
 
 
 # ── Graph builder ─────────────────────────────────────────────────────────────
@@ -410,11 +396,20 @@ def build_agent_graph(
         if s["name"] not in seen:
             seen.add(s["name"])
             unique_specialists.append(s)
-        else:
-            logger.warning("Duplicate specialist '%s' dropped.", s["name"])
     specialists = unique_specialists
     specialists = [s for s in specialists if s["name"] != orchestrator["name"]]
     specialist_map = {a["name"]: a for a in specialists}
+
+    # Orchestrator tools (calculator + datetime for UTC arithmetic)
+    orchestrator_tools: list[str] = []
+    raw_tools = orchestrator.get("tools", [])
+    if isinstance(raw_tools, str):
+        try:
+            orchestrator_tools = json.loads(raw_tools)
+        except json.JSONDecodeError:
+            orchestrator_tools = []
+    elif isinstance(raw_tools, list):
+        orchestrator_tools = raw_tools
 
     async def orchestrator_node(state: WorkflowState) -> WorkflowState:
         state["current_step"] = "orchestrator"
@@ -426,40 +421,49 @@ def build_agent_graph(
         route, usage = await llm_route_and_detect(
             user_input=state["user_input"],
             orchestrator_system_prompt=orchestrator["system_prompt"],
+            orchestrator_tools=orchestrator_tools,
             specialist_agents=specialists,
             model=orchestrator.get("model", ""),
             memory_turns=memory_turns or [],
             previous_routing=prev_routing,
             previous_output=prev_output,
         )
-        targets: list[str] = route.get("targets") or [route.get("target", specialists[0]["name"])]
-        targets = [t for t in targets if t in specialist_map]
+
+        mode     = route.get("routing_mode", "single")
+        targets  = route.get("targets") or [route.get("target", specialists[0]["name"])]
+        targets  = [t for t in targets if t in specialist_map]
         if not targets:
             targets = [specialists[0]["name"]]
 
-        state["routing_decision"] = targets[0]
-        state["routing_targets"]  = targets
-        state["routing_reason"]   = route.get("reason", "")
-        state["schedule_intent"]  = route.get("schedule_intent")
-        state["memory_context"]   = route.get("memory_context", "")
-        state["token_usage"]      = _accumulate_usage(state.get("token_usage"), usage)
-        state["needs_retry"]      = False
+        state["routing_decision"]  = targets[0]
+        state["routing_targets"]   = targets
+        state["routing_reason"]    = route.get("reason", "")
+        state["schedule_intent"]   = route.get("schedule_intent")
+        state["memory_context"]    = route.get("memory_context", "")
+        state["token_usage"]       = _accumulate_usage(state.get("token_usage"), usage)
+        state["needs_retry"]       = False
+        state["pipeline_mode"]     = (mode == "pipeline")
+        state["pipeline_stage"]    = "research" if mode == "pipeline" else ""
+        state["pipeline_queue"]    = route.get("pipeline_queue", [])
+
         logger.info(
-            "Orchestrator routed to: %s | compound=%s | schedule_intent: %s | retry: %d",
-            targets, len(targets) > 1, state["schedule_intent"], state.get("retry_count", 0),
+            "Orchestrator: mode=%s targets=%s schedule=%s retry=%d",
+            mode, targets, state["schedule_intent"], state.get("retry_count", 0),
         )
         return state
 
     def route_from_orchestrator(state: WorkflowState) -> str:
         if state.get("schedule_intent"):
             return "__schedule_end__"
+        if state.get("pipeline_mode"):
+            queue = state.get("pipeline_queue") or []
+            first = queue[0] if queue else ""
+            return first if first in specialist_map else specialists[0]["name"]
         targets = state.get("routing_targets") or [state.get("routing_decision", "")]
         if len(targets) > 1:
             return "__fanout__"
         target = targets[0] if targets else ""
-        if target in specialist_map:
-            return target
-        return specialists[0]["name"]
+        return target if target in specialist_map else specialists[0]["name"]
 
     async def schedule_end_node(state: WorkflowState) -> WorkflowState:
         intent = state["schedule_intent"]
@@ -474,36 +478,53 @@ def build_agent_graph(
         state["current_step"] = "schedule_end"
         return state
 
+    async def pipeline_handoff_node(state: WorkflowState) -> WorkflowState:
+        """
+        Between Researcher and Summariser in pipeline mode.
+        Pops the first item from pipeline_queue (already ran),
+        sets the next agent as target, and passes research_notes
+        as the effective input for the next stage.
+        """
+        queue = list(state.get("pipeline_queue") or [])
+        if queue:
+            queue.pop(0)  # remove completed stage
+        state["pipeline_queue"]  = queue
+        state["pipeline_stage"]  = "summarise" if queue else "done"
+        state["routing_targets"] = queue
+        state["routing_decision"]= queue[0] if queue else ""
+        logger.info("Pipeline handoff: next=%s research_notes_len=%d",
+                    queue[0] if queue else "(done)", len(state.get("research_notes", "")))
+        return state
+
+    def route_from_pipeline_handoff(state: WorkflowState) -> str:
+        queue = state.get("pipeline_queue") or []
+        if queue and queue[0] in specialist_map:
+            return queue[0]
+        return "retry_check"
+
     async def fanout_node(state: WorkflowState) -> WorkflowState:
-        targets        = state.get("routing_targets") or [state.get("routing_decision")]
-        all_responses: list[str]  = []
+        targets         = state.get("routing_targets") or [state.get("routing_decision")]
+        all_responses: list[str]   = []
         all_tool_calls: list[dict] = list(state.get("tool_calls") or [])
-        acc_usage: TokenUsage = _accumulate_usage(state.get("token_usage"), None)
+        acc_usage = _accumulate_usage(state.get("token_usage"), None)
 
         for target_name in targets:
             agent_config = specialist_map.get(target_name)
             if not agent_config:
-                logger.warning("fanout: unknown specialist '%s' — skipped.", target_name)
                 continue
-
             state["current_step"] = target_name
+
             forbidden = agent_config.get("forbidden_topics", [])
             if isinstance(forbidden, str):
-                try:
-                    forbidden = json.loads(forbidden)
-                except json.JSONDecodeError:
-                    forbidden = []
+                try: forbidden = json.loads(forbidden)
+                except: forbidden = []
 
             interaction_rules = agent_config.get("interaction_rules", [])
             if isinstance(interaction_rules, str):
-                try:
-                    interaction_rules = json.loads(interaction_rules)
-                except json.JSONDecodeError:
-                    interaction_rules = []
+                try: interaction_rules = json.loads(interaction_rules)
+                except: interaction_rules = []
 
-            previous_attempt = (
-                state.get("last_specialist_output", "") if state.get("retry_count", 0) > 0 else ""
-            )
+            previous_attempt = state.get("last_specialist_output", "") if state.get("retry_count", 0) > 0 else ""
 
             response, tool_calls, usage = await run_agent_with_tools(
                 system_prompt=agent_config["system_prompt"],
@@ -517,11 +538,9 @@ def build_agent_graph(
                 previous_attempt=previous_attempt,
                 interaction_rules=interaction_rules,
             )
-
             all_responses.append(f"**{target_name}:**\n{response}")
             all_tool_calls.extend(tool_calls)
             acc_usage = _accumulate_usage(acc_usage, usage)
-            logger.info("fanout: specialist '%s' completed.", target_name)
 
         merged = "\n\n".join(all_responses) if all_responses else ""
         state["final_response"] = merged
@@ -540,14 +559,12 @@ def build_agent_graph(
         )
 
         if should_retry:
-            logger.info(
-                "retry_check: triggering retry %d/%d (response=%r)",
-                retry_count + 1, MAX_RETRIES, response[:60],
-            )
             state["needs_retry"]            = True
             state["retry_count"]            = retry_count + 1
             state["last_specialist_output"] = response
             state["final_response"]         = ""
+            state["pipeline_mode"]          = False  # abort pipeline on retry
+            state["pipeline_queue"]         = []
         else:
             state["needs_retry"] = False
             if not response:
@@ -555,40 +572,43 @@ def build_agent_graph(
                 state["status"]         = "failed"
             else:
                 state["status"] = "completed"
-
         return state
 
     def route_from_retry_check(state: WorkflowState) -> str:
         return "orchestrator" if state.get("needs_retry") else "__end__"
 
     def make_specialist_node(agent_config: dict):
+        name = agent_config["name"]
+
         async def specialist_node(state: WorkflowState) -> WorkflowState:
-            name       = agent_config["name"]
-            tool_names = agent_config.get("tools", [])
             state["current_step"] = name
 
             forbidden = agent_config.get("forbidden_topics", [])
             if isinstance(forbidden, str):
-                try:
-                    forbidden = json.loads(forbidden)
-                except json.JSONDecodeError:
-                    forbidden = []
+                try: forbidden = json.loads(forbidden)
+                except: forbidden = []
 
             interaction_rules = agent_config.get("interaction_rules", [])
             if isinstance(interaction_rules, str):
-                try:
-                    interaction_rules = json.loads(interaction_rules)
-                except json.JSONDecodeError:
-                    interaction_rules = []
+                try: interaction_rules = json.loads(interaction_rules)
+                except: interaction_rules = []
 
-            previous_attempt = (
-                state.get("last_specialist_output", "") if state.get("retry_count", 0) > 0 else ""
-            )
+            previous_attempt = state.get("last_specialist_output", "") if state.get("retry_count", 0) > 0 else ""
+
+            # PIPELINE: Summariser receives Researcher's output, not raw user_input
+            if state.get("pipeline_stage") == "summarise" and state.get("research_notes"):
+                effective_input = (
+                    f"The following research was gathered on the topic: \"{state['user_input']}\"\n\n"
+                    f"{state['research_notes']}\n\n"
+                    "Please summarise this into a concise, well-structured brief."
+                )
+            else:
+                effective_input = state["user_input"]
 
             response, tool_calls, usage = await run_agent_with_tools(
                 system_prompt=agent_config["system_prompt"],
-                user_message=state["user_input"],
-                tool_names=tool_names,
+                user_message=effective_input,
+                tool_names=agent_config.get("tools", []),
                 agent_name=name,
                 forbidden_topics=forbidden,
                 max_output_chars=agent_config.get("max_output_chars"),
@@ -598,26 +618,35 @@ def build_agent_graph(
                 interaction_rules=interaction_rules,
             )
 
-            state["research_notes"] = response
-            state["tool_calls"]     = (state.get("tool_calls") or []) + tool_calls
-            state["final_response"] = response
-            state["token_usage"]    = _accumulate_usage(state.get("token_usage"), usage)
+            # In pipeline research stage, store output in research_notes for handoff
+            if state.get("pipeline_stage") == "research":
+                state["research_notes"] = response
+                state["final_response"] = ""  # don't surface intermediate research
+            else:
+                state["research_notes"] = response
+                state["final_response"] = response
+
+            state["tool_calls"]  = (state.get("tool_calls") or []) + tool_calls
+            state["token_usage"] = _accumulate_usage(state.get("token_usage"), usage)
             return state
 
-        specialist_node.__name__ = agent_config["name"]
+        specialist_node.__name__ = name
         return specialist_node
 
+    # ── Build graph ────────────────────────────────────────────────────────────
     graph = StateGraph(WorkflowState)
-    graph.add_node("orchestrator",     orchestrator_node)
-    graph.add_node("__schedule_end__", schedule_end_node)
-    graph.add_node("__fanout__",       fanout_node)
-    graph.add_node("retry_check",      retry_check_node)
+    graph.add_node("orchestrator",         orchestrator_node)
+    graph.add_node("__schedule_end__",     schedule_end_node)
+    graph.add_node("__fanout__",           fanout_node)
+    graph.add_node("__pipeline_handoff__", pipeline_handoff_node)
+    graph.add_node("retry_check",          retry_check_node)
 
     for agent in specialists:
         graph.add_node(agent["name"], make_specialist_node(agent))
 
     graph.add_edge(START, "orchestrator")
 
+    # Orchestrator → one of: schedule_end, fanout, pipeline_first, single_specialist
     routing_map = {a["name"]: a["name"] for a in specialists}
     routing_map["__schedule_end__"] = "__schedule_end__"
     routing_map["__fanout__"]       = "__fanout__"
@@ -626,8 +655,22 @@ def build_agent_graph(
     graph.add_edge("__schedule_end__", END)
     graph.add_edge("__fanout__",       "retry_check")
 
+    # Specialist → pipeline_handoff OR retry_check
     for agent in specialists:
-        graph.add_edge(agent["name"], "retry_check")
+        graph.add_conditional_edges(
+            agent["name"],
+            lambda state, _name=agent["name"]: (
+                "__pipeline_handoff__"
+                if state.get("pipeline_mode") and state.get("pipeline_stage") == "research"
+                else "retry_check"
+            ),
+            {"__pipeline_handoff__": "__pipeline_handoff__", "retry_check": "retry_check"},
+        )
+
+    # Pipeline handoff → next specialist OR retry_check
+    pipeline_map = {a["name"]: a["name"] for a in specialists}
+    pipeline_map["retry_check"] = "retry_check"
+    graph.add_conditional_edges("__pipeline_handoff__", route_from_pipeline_handoff, pipeline_map)
 
     graph.add_conditional_edges(
         "retry_check",

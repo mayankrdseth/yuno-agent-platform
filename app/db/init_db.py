@@ -7,21 +7,25 @@ from app.db.base import Base
 from app.db.session import engine, AsyncSessionLocal
 from app.models import agent  # noqa: F401
 from app.models import workflow_template  # noqa: F401
-from app.models import conversation_memory  # noqa: F401  — registers table
+from app.models import conversation_memory  # noqa: F401
 from app.models.agent import Agent
 from app.models.workflow_template import WorkflowTemplate
 
 logger = logging.getLogger(__name__)
 
-# ─── Pre-built templates ─────────────────────────────────────────────────────────────────────────
 BUILTIN_TEMPLATES = [
     {
         "name": "Research Hub",
-        "description": "ResearchOrchestrator routes to Researcher (web/wiki) for factual queries or Mathematician (calculator/datetime) for numeric tasks.",
-        "agent_names": ["ResearchOrchestrator", "Researcher", "Mathematician"],
+        "description": (
+            "ResearchOrchestrator routes queries: factual lookups go to Researcher, "
+            "research+summarise requests run as a pipeline (Researcher → Summariser), "
+            "and compound queries fan out to both agents in parallel."
+        ),
+        "agent_names": ["ResearchOrchestrator", "Researcher", "Summariser"],
         "edge_pairs": [
             ("ResearchOrchestrator", "Researcher"),
-            ("ResearchOrchestrator", "Mathematician"),
+            ("ResearchOrchestrator", "Summariser"),
+            ("Researcher", "Summariser"),  # pipeline edge
         ],
         "is_builtin": 1,
     },
@@ -37,28 +41,32 @@ BUILTIN_TEMPLATES = [
     },
 ]
 
-# ─── Pre-built agents ────────────────────────────────────────────────────────────────────────────
 BUILTIN_AGENTS = [
     {
         "name": "ResearchOrchestrator",
         "role": "orchestrator",
         "system_prompt": (
-            "You are the Research Orchestrator. Read the user request and decide which specialist "
-            "should handle it:\n"
-            "- Send factual, knowledge, or information queries to Researcher.\n"
-            "- Send numeric, calculation, date, or unit conversion queries to Mathematician.\n"
-            "Respond ONLY with JSON: {\"target\": \"<agent_name>\", \"reason\": \"<short reason>\"}"
+            "You are the Research Orchestrator. Analyse the user request and decide the routing mode:\n"
+            "- SINGLE to Researcher: factual questions, information lookup, knowledge queries\n"
+            "- PIPELINE [Researcher → Summariser]: when the user wants research AND a summary/brief/TL;DR\n"
+            "- FANOUT [Researcher, Summariser]: when the query independently needs both agents\n"
+            "- SCHEDULE: when the user wants to schedule a recurring task\n"
+            "Respond ONLY with the routing JSON as instructed."
         ),
         "model": "llama-3.3-70b-versatile",
-        "tools": [],
+        "tools": ["calculator", "datetime"],
         "channels": ["telegram"],
         "is_active": True,
         "max_iterations": 5,
         "memory_enabled": True,
         "forbidden_topics": [],
         "max_output_chars": None,
-        "skills": ["routing", "intent_detection"],
-        "interaction_rules": ["always respond in JSON when routing", "never answer user queries directly"],
+        "skills": ["routing", "intent_detection", "pipeline_orchestration"],
+        "interaction_rules": [
+            "always respond in JSON when routing",
+            "never answer user queries directly",
+            "use calculator tool for UTC timezone arithmetic when scheduling",
+        ],
     },
     {
         "name": "Researcher",
@@ -66,7 +74,8 @@ BUILTIN_AGENTS = [
         "system_prompt": (
             "You are the Researcher agent. Find accurate, up-to-date information using your tools. "
             "Structure every answer as: 1) one-sentence summary, 2) key findings as bullet points, "
-            "3) a short conclusion. Be factual and concise."
+            "3) a short conclusion. Be factual, thorough, and cite sources where possible. "
+            "Your output may be passed to a Summariser agent — provide complete, detailed research."
         ),
         "model": "llama-3.3-70b-versatile",
         "tools": ["web_search", "wikipedia"],
@@ -77,26 +86,39 @@ BUILTIN_AGENTS = [
         "forbidden_topics": [],
         "max_output_chars": None,
         "skills": ["web_search", "summarisation", "fact_checking"],
-        "interaction_rules": ["always cite sources when available", "structure answers with bullet points"],
+        "interaction_rules": [
+            "always cite sources when available",
+            "structure answers with bullet points",
+            "provide thorough detail — your output may be consumed by another agent",
+        ],
     },
     {
-        "name": "Mathematician",
+        "name": "Summariser",
         "role": "agent",
         "system_prompt": (
-            "You are the Mathematician agent. Solve numeric problems, equations, unit conversions, "
-            "and date/time calculations with precision. Always show your working clearly. "
-            "Use the calculator tool for arithmetic and the datetime tool for date-related queries."
+            "You are the Summariser agent. Your job is to take detailed research or long-form content "
+            "and condense it into a clear, well-structured brief. "
+            "Always structure your output as: "
+            "1) TL;DR (one sentence), "
+            "2) Key points (3-5 bullets), "
+            "3) Conclusion (1-2 sentences). "
+            "Be concise. Remove redundancy. Preserve the most important facts. "
+            "If given raw research notes from a Researcher agent, synthesise them — do not just repeat them."
         ),
         "model": "llama-3.3-70b-versatile",
-        "tools": ["calculator", "datetime"],
+        "tools": ["web_search", "wikipedia"],
         "channels": [],
         "is_active": True,
-        "max_iterations": 5,
+        "max_iterations": 3,
         "memory_enabled": False,
         "forbidden_topics": [],
         "max_output_chars": None,
-        "skills": ["arithmetic", "unit_conversion", "date_calculations"],
-        "interaction_rules": ["always show step-by-step working", "use the calculator tool for all arithmetic"],
+        "skills": ["summarisation", "content_condensing", "structured_briefs"],
+        "interaction_rules": [
+            "always output in TL;DR → key points → conclusion format",
+            "never repeat the source material verbatim — synthesise it",
+            "prioritise brevity and clarity over completeness",
+        ],
     },
     {
         "name": "SupportOrchestrator",
@@ -105,10 +127,10 @@ BUILTIN_AGENTS = [
             "You are the Support Orchestrator. Read the incoming support request and triage it:\n"
             "- Send general, routine, or informational queries to Supporter.\n"
             "- Send urgent, complex, unresolved, or escalation requests to Escalator.\n"
-            "Respond ONLY with JSON: {\"target\": \"<agent_name>\", \"reason\": \"<short reason>\"}"
+            "Respond ONLY with JSON: {\"routing_mode\": \"single\", \"target\": \"<agent_name>\", \"reason\": \"<short reason>\"}"
         ),
         "model": "llama-3.3-70b-versatile",
-        "tools": [],
+        "tools": ["calculator", "datetime"],
         "channels": ["telegram"],
         "is_active": True,
         "max_iterations": 5,
@@ -116,7 +138,11 @@ BUILTIN_AGENTS = [
         "forbidden_topics": [],
         "max_output_chars": None,
         "skills": ["triage", "routing", "urgency_detection"],
-        "interaction_rules": ["always respond in JSON when routing", "classify urgency before routing"],
+        "interaction_rules": [
+            "always respond in JSON when routing",
+            "classify urgency before routing",
+            "use calculator tool for UTC timezone arithmetic when scheduling",
+        ],
     },
     {
         "name": "Supporter",
@@ -135,7 +161,10 @@ BUILTIN_AGENTS = [
         "forbidden_topics": [],
         "max_output_chars": None,
         "skills": ["customer_support", "empathy", "communication"],
-        "interaction_rules": ["always acknowledge the user's concern first", "end responses with an offer to help further"],
+        "interaction_rules": [
+            "always acknowledge the user's concern first",
+            "end responses with an offer to help further",
+        ],
     },
     {
         "name": "Escalator",
@@ -155,11 +184,13 @@ BUILTIN_AGENTS = [
         "forbidden_topics": [],
         "max_output_chars": None,
         "skills": ["escalation", "incident_reporting", "urgency_classification"],
-        "interaction_rules": ["always include a timestamp in escalation reports", "structure output as: summary / urgency / action / timestamp"],
+        "interaction_rules": [
+            "always include a timestamp in escalation reports",
+            "structure output as: summary / urgency / action / timestamp",
+        ],
     },
 ]
 
-# ─── Safe migration: add columns that may be missing in an existing DB ───────────
 _AGENT_MIGRATIONS = [
     ("schedule",          "VARCHAR(120)"),
     ("schedule_prompt",   "TEXT"),
@@ -169,13 +200,10 @@ _AGENT_MIGRATIONS = [
 
 
 async def _migrate_agents_table() -> None:
-    """Add any missing columns to the agents table (safe for fresh + existing DBs)."""
     async with engine.begin() as conn:
         for col_name, col_def in _AGENT_MIGRATIONS:
             try:
-                await conn.execute(
-                    text(f"ALTER TABLE agents ADD COLUMN {col_name} {col_def}")
-                )
+                await conn.execute(text(f"ALTER TABLE agents ADD COLUMN {col_name} {col_def}"))
                 logger.info("Migration: added column agents.%s", col_name)
             except Exception:
                 pass
@@ -184,15 +212,9 @@ async def _migrate_agents_table() -> None:
 async def _seed_builtin_agents() -> None:
     """
     Insert new agents and UPDATE existing ones.
-
-    Fields updated on every startup for existing agents:
-      - skills, interaction_rules, forbidden_topics, system_prompt
-
-    This ensures that an already-running DB picks up the latest agent
-    definitions on next restart without requiring a DB wipe.
-    Fields NOT overwritten: tools, channels, model, is_active, memory_enabled,
-    max_iterations, max_output_chars, schedule, schedule_prompt
-    (those may have been customised by the user via the API).
+    Fields updated: skills, interaction_rules, forbidden_topics, system_prompt, tools.
+    User-customisable fields preserved: model, channels, is_active, memory_enabled,
+    max_iterations, max_output_chars, schedule, schedule_prompt.
     """
     async with AsyncSessionLocal() as db:
         for agent_def in BUILTIN_AGENTS:
@@ -200,7 +222,6 @@ async def _seed_builtin_agents() -> None:
             existing = result.scalar_one_or_none()
 
             if existing is None:
-                # Fresh insert
                 db.add(Agent(
                     name=agent_def["name"],
                     role=agent_def["role"],
@@ -218,13 +239,12 @@ async def _seed_builtin_agents() -> None:
                 ))
                 logger.info("Seeded agent: %s (%s)", agent_def["name"], agent_def["role"])
             else:
-                # Update fields that should always reflect the latest definition.
-                # User-customisable fields (tools, model, channels, etc.) are preserved.
-                existing.skills = json.dumps(agent_def.get("skills", []))
+                existing.skills            = json.dumps(agent_def.get("skills", []))
                 existing.interaction_rules = json.dumps(agent_def.get("interaction_rules", []))
-                existing.forbidden_topics = json.dumps(agent_def["forbidden_topics"])
-                existing.system_prompt = agent_def["system_prompt"]
-                logger.info("Updated agent: %s (skills/interaction_rules/system_prompt)", agent_def["name"])
+                existing.forbidden_topics  = json.dumps(agent_def["forbidden_topics"])
+                existing.system_prompt     = agent_def["system_prompt"]
+                existing.tools             = json.dumps(agent_def["tools"])  # update tools too
+                logger.info("Updated agent: %s", agent_def["name"])
 
         await db.commit()
 
@@ -233,27 +253,28 @@ async def _seed_builtin_templates() -> None:
     async with AsyncSessionLocal() as db:
         for tpl_def in BUILTIN_TEMPLATES:
             result = await db.execute(select(WorkflowTemplate).where(WorkflowTemplate.name == tpl_def["name"]))
-            if result.scalar_one_or_none():
-                continue
-            db.add(WorkflowTemplate(
-                name=tpl_def["name"],
-                description=tpl_def["description"],
-                agent_ids=json.dumps(tpl_def["agent_names"]),
-                edges=json.dumps([{"source": s, "target": t} for s, t in tpl_def["edge_pairs"]]),
-                is_builtin=1,
-            ))
-            logger.info("Seeded template: %s", tpl_def["name"])
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                db.add(WorkflowTemplate(
+                    name=tpl_def["name"],
+                    description=tpl_def["description"],
+                    agent_ids=json.dumps(tpl_def["agent_names"]),
+                    edges=json.dumps([{"source": s, "target": t} for s, t in tpl_def["edge_pairs"]]),
+                    is_builtin=1,
+                ))
+                logger.info("Seeded template: %s", tpl_def["name"])
+            else:
+                # Update template description and edges to reflect pipeline addition
+                existing.description = tpl_def["description"]
+                existing.agent_ids   = json.dumps(tpl_def["agent_names"])
+                existing.edges       = json.dumps([{"source": s, "target": t} for s, t in tpl_def["edge_pairs"]])
+                logger.info("Updated template: %s", tpl_def["name"])
         await db.commit()
 
 
 async def init_db() -> None:
-    # 1. Create any brand-new tables (idempotent)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-    # 2. Migrate existing tables (add missing columns)
     await _migrate_agents_table()
-
-    # 3. Seed / update built-in data
     await _seed_builtin_agents()
     await _seed_builtin_templates()
