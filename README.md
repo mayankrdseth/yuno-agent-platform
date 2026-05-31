@@ -308,9 +308,10 @@ This is the key difference from FANOUT: in FANOUT both agents get `user_input` i
 
 > ⚡ **Orchestrator tools** (`calculator` and `datetime`) are **always active** on both orchestrators and are pinned in the UI with a lock icon — they cannot be unchecked via the edit modal. These tools are required for UTC timezone arithmetic when scheduling cron jobs.
 >
-> This is enforced at two layers:
-> - **Frontend** — the checkboxes for `calculator` and `datetime` are disabled with `🔒` when `role === "orchestrator"`, and the save handler always force-includes them: `tools = [...new Set(["calculator", "datetime", ...tools])]`
-> - **Backend seed** — `init_db.py` seeds both `ResearchOrchestrator` and `SupportOrchestrator` with `"tools": ["calculator", "datetime"]` and upserts on every restart, so the tools are restored even if manually cleared from the DB.
+> This is enforced at three layers:
+> 1. **Frontend canvas node** — orchestrator nodes always display `calculator` and `datetime` with a teal ⚡ badge regardless of the stored tools list (they are visually promoted to the front).
+> 2. **Frontend edit modal** — the checkboxes for `calculator` and `datetime` are disabled with `🔒` when `role === "orchestrator"`, and the save handler always force-includes them: `tools = [...new Set(["calculator", "datetime", ...tools])]`
+> 3. **Backend seed** — `init_db.py` seeds both `ResearchOrchestrator` and `SupportOrchestrator` with `"tools": ["calculator", "datetime"]` as the first two entries and upserts `tools` on every restart, so the tools are restored even if manually cleared from the DB.
 
 ### Built-in Templates
 
@@ -332,11 +333,22 @@ This is the key difference from FANOUT: in FANOUT both agents get `user_input` i
 
 Every agent node on the ReactFlow canvas displays its tools inline:
 
-- **⚡ Teal badge** — orchestrator-pinned tools (`calculator`, `datetime`). Always shown, locked in the edit modal.
+- **⚡ Teal badge** — orchestrator-pinned tools (`calculator`, `datetime`). Always shown first, locked in the edit modal.
 - **🔧 Amber badge** — specialist tools (e.g. `web_search`, `wikipedia`).
 - **📡 Blue badge** — messaging channels (e.g. `telegram`).
 
 This makes the workflow topology immediately readable — you can see at a glance which tools each agent brings to the workflow.
+
+### Tool Calls Tab — Run Detail Panel
+
+Every tool invocation during a workflow run is captured and displayed in the **Tool Calls** tab of the Run Detail panel:
+
+- **Tool name** — shown in the card header (e.g. `calculator`, `datetime`, `web_search`)
+- **Input** — the exact argument passed to the tool
+- **Result** — the tool's return value (truncated to 500 chars for readability; full output visible in the Timeline tab)
+- **Caller** — the agent that invoked the tool (shown as `via <agent_name>`)
+
+Tool call messages are stored in the DB as structured JSON (`{"tool": ..., "input": ..., "output": ...}`) and broadcast over the WebSocket monitor stream in the same format.
 
 ### Backend (`app/`)
 
@@ -355,6 +367,7 @@ This makes the workflow topology immediately readable — you can see at a glanc
 | `runtime/state.py` | `WorkflowState` TypedDict (includes `pipeline_mode`, `pipeline_stage`, `pipeline_queue`) |
 | `db/init_db.py` | Creates tables, seeds built-in agents + templates (upserts on restart) |
 | `core/broadcast.py` | Async pub/sub queue for WebSocket monitor events |
+| `services/workflow_service.py` | Orchestrates a workflow run: loads agents, invokes graph, persists messages (tool calls as JSON), handles memory + scheduling |
 | `services/scheduler_service.py` | APScheduler cron jobs (UTC only) for scheduled agent runs |
 | `services/memory_service.py` | Per-session conversation memory for orchestrator agents |
 
