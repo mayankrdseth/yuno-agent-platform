@@ -330,7 +330,7 @@ function EditAgentModal({ agent, onClose, onSaved }) {
 /* ─────────────────────────────────────────────
    Run Detail Panel — tabbed
 ───────────────────────────────────────────── */
-function RunDetailPanel({ run, messages, onClose }) {
+function RunDetailPanel({ run, messages, agentCount, onClose }) {
   const [tab, setTab] = useState("timeline");
 
   const timeline = useMemo(() => {
@@ -339,6 +339,7 @@ function RunDetailPanel({ run, messages, onClose }) {
 
   const agentMessages = useMemo(() => timeline.filter((m) => ["input", "output", "agent_message"].includes(m.message_type)), [timeline]);
   const toolCalls = useMemo(() => timeline.filter((m) => m.message_type === "tool_call"), [timeline]);
+  const errorEvents = useMemo(() => timeline.filter((m) => m.message_type === "error"), [timeline]);
 
   const duration = fmtDuration(run.created_at, run.completed_at);
   const cost = fmtCost(run.total_tokens);
@@ -351,7 +352,6 @@ function RunDetailPanel({ run, messages, onClose }) {
   ];
 
   const typeColor = { input: "#0ea5e9", output: "#22c55e", log: "#6b7280", agent_message: "#8b5cf6", tool_call: "#f59e0b", error: "#ef4444" };
-
   const typeIcon = { input: "→", output: "←", log: "·", agent_message: "💬", tool_call: "🔧", error: "✕" };
 
   function Tag({ type }) {
@@ -369,6 +369,23 @@ function RunDetailPanel({ run, messages, onClose }) {
       <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", fontSize: 12, color: "#d1d5db", lineHeight: 1.55 }}>{str}</pre>
     );
   }
+
+  /* ── Stats tile data — all derived from props, no external refs ── */
+  const statsData = [
+    { label: "Status", value: run.status ?? "—", color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b" },
+    { label: "Run ID", value: `#${run.id}` },
+    { label: "Started", value: run.created_at ? new Date(run.created_at).toLocaleString() : "—" },
+    { label: "Completed", value: run.completed_at ? new Date(run.completed_at).toLocaleString() : "—" },
+    { label: "Duration", value: duration ?? "—", color: "#1affd5" },
+    { label: "Agents", value: agentCount > 0 ? agentCount : "—", color: agentCount > 0 ? "#f59e0b" : undefined },
+    { label: "Total Events", value: timeline.length },
+    { label: "Agent Messages", value: agentMessages.length },
+    { label: "Tool Calls", value: toolCalls.length, color: toolCalls.length > 0 ? "#f59e0b" : undefined },
+    { label: "Errors", value: errorEvents.length, color: errorEvents.length > 0 ? "#ef4444" : "#22c55e" },
+    { label: "Total Tokens", value: run.total_tokens ? run.total_tokens.toLocaleString() : "—" },
+    { label: "Est. Cost", value: cost ?? "—", color: "#22c55e" },
+    { label: "Model", value: run.model ?? "—" },
+  ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -482,23 +499,10 @@ function RunDetailPanel({ run, messages, onClose }) {
         {/* STATS */}
         {tab === "stats" && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10, paddingTop: 4 }}>
-            {[
-              { label: "Status", value: run.status, color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b" },
-              { label: "Run ID", value: `#${run.id}` },
-              { label: "Started", value: run.created_at ? new Date(run.created_at).toLocaleString() : "—" },
-              { label: "Completed", value: run.completed_at ? new Date(run.completed_at).toLocaleString() : "—" },
-              { label: "Duration", value: duration || "—", color: "#1affd5" },
-              { label: "Total Messages", value: timeline.length },
-              { label: "Agent Messages", value: agentMessages.length },
-              { label: "Tool Calls", value: toolCalls.length, color: toolCalls.length > 0 ? "#f59e0b" : undefined },
-              { label: "Total Tokens", value: run.total_tokens ? run.total_tokens.toLocaleString() : "—" },
-              { label: "Est. Cost", value: cost || "—", color: "#22c55e" },
-              { label: "Model", value: run.model || "—" },
-              { label: "Agents", value: run.agent_count || nodes?.length || "—" },
-            ].map(({ label, value, color }) => (
+            {statsData.map(({ label, value, color }) => (
               <div key={label} style={{ background: "#0f1117", borderRadius: 8, border: "1px solid #2d3348", padding: "10px 14px" }}>
                 <div style={{ fontSize: 10, color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: color || "#e8e8e8" }}>{String(value)}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: color || "#e8e8e8" }}>{String(value ?? "—")}</div>
               </div>
             ))}
           </div>
@@ -762,6 +766,13 @@ export default function App() {
 
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
 
+  /* Derive agentCount for the selected run from canvas nodes */
+  const selectedRunAgentCount = useMemo(() => {
+    if (!selectedRunId) return 0;
+    // If the canvas still has agents loaded, use that count; otherwise fall back to 0
+    return nodes.length > 0 ? nodes.length : 0;
+  }, [selectedRunId, nodes]);
+
   function btStyle(tab) {
     const active = bottomTab === tab;
     return {
@@ -798,308 +809,352 @@ export default function App() {
           <span style={{ fontSize: 11, fontWeight: 700, color: statusColor }}>{run.status?.toUpperCase()}</span>
           <span style={{ fontSize: 11, color: "#6b7280" }}>#{run.id}</span>
           <span style={{ fontSize: 10, color: "#4b5563", marginLeft: "auto" }}>
-            {run.created_at ? new Date(run.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+            {run.created_at ? new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
           </span>
         </div>
         {/* Row 2: input preview */}
-        <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
-          {run.input_text || "(no input)"}
-        </div>
-        {/* Row 3: metadata chips */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-          {run.total_tokens > 0 && (
-            <span style={{ fontSize: 10, background: "#1a1f2e", color: "#6b7280", border: "1px solid #2d3348", borderRadius: 4, padding: "1px 6px" }}>
-              {run.total_tokens.toLocaleString()} tok
-            </span>
-          )}
-          {cost && (
-            <span style={{ fontSize: 10, background: "#22c55e15", color: "#22c55e", border: "1px solid #22c55e30", borderRadius: 4, padding: "1px 6px" }}>
-              {cost}
-            </span>
-          )}
-          {duration && (
-            <span style={{ fontSize: 10, background: "#1affd515", color: "#1affd5", border: "1px solid #1affd530", borderRadius: 4, padding: "1px 6px" }}>
-              {duration}
-            </span>
-          )}
-          {run.model && (
-            <span style={{ fontSize: 10, background: "#1a1f2e", color: "#6b7280", border: "1px solid #2d3348", borderRadius: 4, padding: "1px 6px", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 120, whiteSpace: "nowrap", display: "inline-block" }}>
-              {run.model}
-            </span>
-          )}
+        {run.input_text && (
+          <div style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 5 }}>
+            {run.input_text}
+          </div>
+        )}
+        {/* Row 3: pills */}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {duration && <span style={{ fontSize: 10, background: "#1affd515", color: "#1affd5", border: "1px solid #1affd530", borderRadius: 3, padding: "1px 6px" }}>⏱ {duration}</span>}
+          {run.total_tokens > 0 && <span style={{ fontSize: 10, background: "#8b5cf615", color: "#8b5cf6", border: "1px solid #8b5cf630", borderRadius: 3, padding: "1px 6px" }}>🔢 {run.total_tokens.toLocaleString()} tok</span>}
+          {cost && <span style={{ fontSize: 10, background: "#22c55e15", color: "#22c55e", border: "1px solid #22c55e30", borderRadius: 3, padding: "1px 6px" }}>{cost}</span>}
         </div>
       </button>
     );
   }
 
+  /* ────────────────────────────────────────────── render ── */
   return (
-    <div className="app-shell">
-      {editingAgent && (
-        <EditAgentModal agent={editingAgent} onClose={() => setEditingAgent(null)} onSaved={handleAgentSaved} />
-      )}
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0f1117", color: "#e8e8e8", fontFamily: "'Inter', 'Segoe UI', sans-serif", fontSize: 13, overflow: "hidden" }}>
 
-      {/* ════════════════ SIDEBAR ════════════════ */}
-      <aside className="sidebar">
-        <div style={{ paddingBottom: 10, borderBottom: "1px solid #1e2538" }}>
-          <div className="eyebrow" style={{ marginBottom: 4 }}>Yuno Challenge</div>
-          <h1 style={{ fontSize: "1.4rem", marginBottom: 4 }}>Agent Platform</h1>
-          <p className="muted" style={{ fontSize: 12 }}>Build · Run · Monitor</p>
+      {/* ── Top bar ── */}
+      <div style={{ height: 48, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 20px", borderBottom: "1px solid #1e2538", background: "#0d1018", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="#1affd5" strokeWidth="1.5" />
+            <circle cx="12" cy="12" r="4" fill="#1affd5" opacity="0.8" />
+            <line x1="12" y1="2" x2="12" y2="6" stroke="#1affd5" strokeWidth="1.5" />
+            <line x1="12" y1="18" x2="12" y2="22" stroke="#1affd5" strokeWidth="1.5" />
+            <line x1="2" y1="12" x2="6" y2="12" stroke="#1affd5" strokeWidth="1.5" />
+            <line x1="18" y1="12" x2="22" y2="12" stroke="#1affd5" strokeWidth="1.5" />
+          </svg>
+          <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "0.02em" }}>Yuno <span style={{ color: "#1affd5" }}>Agent Platform</span></span>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {liveEvents.length > 0 && (
+            <span style={{ fontSize: 10, background: "#22c55e15", color: "#22c55e", border: "1px solid #22c55e30", borderRadius: 99, padding: "2px 10px", fontWeight: 700 }}>
+              ● LIVE
+            </span>
+          )}
+          <span style={{ fontSize: 11, color: "#6b7280" }}>{agents.length} agents · {runs.length} runs</span>
+        </div>
+      </div>
 
-        {/* ── Create Agent ── */}
-        <SidebarSection title="Create Agent" defaultOpen={false}>
-          <form onSubmit={createAgent} className="form-grid">
-            <input placeholder="Agent name" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} required />
-            <div>
-              <div className="muted-small" style={{ marginBottom: 4 }}>Role</div>
-              <select value={agentForm.role} onChange={(e) => setAgentForm({ ...agentForm, role: e.target.value, channels: [] })} style={{ width: "100%", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+      {/* ── Main 3-column layout ── */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+
+        {/* LEFT: Agent Library */}
+        <div style={{ width: 260, borderRight: "1px solid #1e2538", overflowY: "auto", padding: "14px 16px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 0 }}>
+
+          <SidebarSection title="Create Agent">
+            <form onSubmit={createAgent} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input placeholder="Agent name" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} required />
+              <select value={agentForm.role} onChange={(e) => setAgentForm({ ...agentForm, role: e.target.value, channels: [] })} style={{ background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
                 <option value="agent">Agent</option>
                 <option value="orchestrator">Orchestrator</option>
               </select>
-            </div>
-            <textarea placeholder="System prompt" rows={3} value={agentForm.system_prompt} onChange={(e) => setAgentForm({ ...agentForm, system_prompt: e.target.value })} required />
-            <div>
-              <div className="muted-small" style={{ marginBottom: 4 }}>Model</div>
-              <select value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} style={{ width: "100%", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
+              <textarea placeholder="System prompt (optional)" rows={3} value={agentForm.system_prompt} onChange={(e) => setAgentForm({ ...agentForm, system_prompt: e.target.value })} style={{ resize: "vertical" }} />
+              <select value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} style={{ background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
                 {AVAILABLE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
-            </div>
-            <div>
-              <div className="muted-small" style={{ marginBottom: 6 }}>Tools
-                {isOrchestratorForm && <span style={{ marginLeft: 8, fontSize: 10, color: "#1affd5" }}>⚡ calculator &amp; datetime auto-included</span>}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {AVAILABLE_TOOLS.map((tool) => {
-                  const isPinned = isOrchestratorForm && (tool === "calculator" || tool === "datetime");
-                  return (
-                    <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: isPinned ? "default" : "pointer", opacity: isPinned ? 0.7 : 1 }}>
-                      <input type="checkbox" checked={isPinned ? true : agentForm.tools.includes(tool)} disabled={isPinned} onChange={() => !isPinned && toggleTool(tool)} />
-                      {tool}{isPinned ? " 🔒" : ""}
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-            {isOrchestratorForm && (
+
               <div>
-                <div className="muted-small" style={{ marginBottom: 6 }}>Channels <span style={{ color: "#f59e0b", fontSize: 10 }}>(orchestrator only)</span></div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {AVAILABLE_CHANNELS.map((ch) => (
-                    <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
-                      <input type="checkbox" checked={agentForm.channels.includes(ch)} onChange={() => toggleChannel(ch)} />
-                      {ch}
-                    </label>
-                  ))}
+                <div className="muted-small" style={{ marginBottom: 5 }}>
+                  Tools
+                  {isOrchestratorForm && <span style={{ marginLeft: 6, fontSize: 10, color: "#1affd5" }}>⚡ calculator &amp; datetime always active</span>}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  {AVAILABLE_TOOLS.map((tool) => {
+                    const isPinned = isOrchestratorForm && (tool === "calculator" || tool === "datetime");
+                    return (
+                      <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, cursor: isPinned ? "default" : "pointer", opacity: isPinned ? 0.65 : 1 }}>
+                        <input type="checkbox" checked={isPinned ? true : agentForm.tools.includes(tool)} disabled={isPinned} onChange={() => !isPinned && toggleTool(tool)} />
+                        {tool}{isPinned ? " 🔒" : ""}
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
-            )}
-            <input placeholder="Forbidden topics (comma-sep)" value={agentForm.forbidden_topics} onChange={(e) => setAgentForm({ ...agentForm, forbidden_topics: e.target.value })} />
-            <input placeholder="Skills (comma-sep)" value={agentForm.skills} onChange={(e) => setAgentForm({ ...agentForm, skills: e.target.value })} />
-            <button className="primary-btn" type="submit">Create agent</button>
-          </form>
-        </SidebarSection>
 
-        {/* ── Agent Catalog ── */}
-        <SidebarSection title="Agent Catalog" badge={agents.length} defaultOpen={true}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {agents.length === 0 && <div className="muted-small" style={{ fontSize: 11 }}>No agents yet. Create one above.</div>}
-            {agents.map((agent) => {
-              const tools = parseList(agent.tools);
-              const channels = parseList(agent.channels);
-              const inGraph = nodes.some((n) => n.id === String(agent.id));
-              const isOrch = agent.role === "orchestrator";
-              return (
-                <div key={agent.id} style={{ background: "#0f1117", border: "1px solid #2d3348", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flex: 1 }}>
-                      <strong style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.name}</strong>
-                      {isOrch && <span style={{ flexShrink: 0, fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>}
-                      {agent.schedule && <span style={{ flexShrink: 0, fontSize: 9, background: "#8b5cf618", color: "#8b5cf6", border: "1px solid #8b5cf635", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>CRON</span>}
-                    </div>
-                    <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
-                      <button onClick={() => setEditingAgent(agent)} title="Edit" style={{ fontSize: 11, padding: "2px 7px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>✎</button>
-                      {inGraph
-                        ? <button onClick={() => removeAgentFromWorkflow(agent.id)} style={{ fontSize: 11, padding: "2px 7px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>— canvas</button>
-                        : <button onClick={() => addAgentToWorkflow(agent)} style={{ fontSize: 11, padding: "2px 7px", borderRadius: 4, border: "1px solid #1affd530", background: "transparent", color: "#1affd5", cursor: "pointer" }}>+ canvas</button>
-                      }
-                      <button onClick={() => deleteAgent(agent.id)} title="Delete" style={{ fontSize: 11, padding: "2px 7px", borderRadius: 4, border: "1px solid #ef444420", background: "transparent", color: "#ef444480", cursor: "pointer" }}>🗑</button>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: tools.length ? 4 : 0 }}>{agent.model}</div>
-                  {tools.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                      {tools.map((t) => {
-                        const isPinned = isOrch && (t === "calculator" || t === "datetime");
-                        return <span key={t} style={{ background: isPinned ? "#1affd515" : "#f59e0b15", color: isPinned ? "#1affd5" : "#f59e0b", border: `1px solid ${isPinned ? "#1affd530" : "#f59e0b30"}`, borderRadius: 3, fontSize: 9, padding: "1px 4px" }}>{isPinned ? "⚡" : "🔧"}{t}</span>;
-                      })}
-                      {channels.map((c) => <span key={c} style={{ background: "#0ea5e915", color: "#0ea5e9", border: "1px solid #0ea5e930", borderRadius: 3, fontSize: 9, padding: "1px 4px" }}>📡{c}</span>)}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </SidebarSection>
-
-        {/* ── Templates ── */}
-        <SidebarSection title="Workflow Templates" badge={templates.length} defaultOpen={true}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-            {templates.length === 0 && <div className="muted-small" style={{ fontSize: 11 }}>No templates saved yet.</div>}
-            {templates.map((tpl) => (
-              <div key={tpl.id} style={{ background: "#0f1117", border: `1px solid ${activeTemplateId === tpl.id ? "#1affd560" : "#2d3348"}`, borderRadius: 7, padding: "7px 10px" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, color: "#e8e8e8" }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
-                      {tpl.is_builtin && <span style={{ flexShrink: 0, fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>BUILT-IN</span>}
-                      {activeTemplateId === tpl.id && <span style={{ flexShrink: 0, fontSize: 9, background: "#1affd518", color: "#1affd5", border: "1px solid #1affd535", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ACTIVE</span>}
-                    </div>
-                    {tpl.description && <div className="muted-small" style={{ fontSize: 10, marginTop: 2 }}>{tpl.description}</div>}
-                  </div>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    <button onClick={() => loadTemplate(tpl)} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #1affd530", background: "transparent", color: "#1affd5", cursor: "pointer" }}>Load</button>
-                    {!tpl.is_builtin && <button onClick={() => deleteTemplate(tpl.id)} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>Del</button>}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          {templateMsg && <div style={{ fontSize: 11, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171", marginBottom: 8, padding: "4px 8px", background: templateMsg.startsWith("✓") ? "#22c55e15" : "#f8717115", borderRadius: 5 }}>{templateMsg}</div>}
-          <div className="form-grid">
-            <input placeholder="Workflow name" value={templateName} onChange={(e) => setTemplateName(e.target.value)} />
-            <input placeholder="Description (optional)" value={templateDesc} onChange={(e) => setTemplateDesc(e.target.value)} />
-            <button className="primary-btn" onClick={saveTemplate} disabled={savingTemplate} style={{ padding: "8px 12px", fontSize: 12 }}>{savingTemplate ? "Saving..." : "Save current canvas"}</button>
-          </div>
-        </SidebarSection>
-      </aside>
-
-      {/* ════════════════ MAIN ════════════════ */}
-      <main className="main">
-
-        {/* ── Canvas + Run Panel ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, height: "calc(100vh - 300px)", minHeight: 400 }}>
-
-          {/* ReactFlow Canvas */}
-          <div className="panel" style={{ padding: 0, overflow: "hidden", position: "relative" }}>
-            <div style={{ position: "absolute", top: 10, left: 12, zIndex: 10 }}>
-              <div className="eyebrow">Visual Builder</div>
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>Drag to reposition · Connect handles to wire agents</div>
-            </div>
-            {nodes.length === 0 && (
-              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 5, pointerEvents: "none" }}>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>🕸</div>
-                <div className="muted-small" style={{ fontSize: 13 }}>Canvas is empty</div>
-                <div className="muted-small" style={{ fontSize: 11, marginTop: 4 }}>Load a template or add agents from the sidebar</div>
-              </div>
-            )}
-            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} nodeTypes={nodeTypes} fitView fitViewOptions={{ padding: 0.3 }} style={{ background: "#0a0d14" }}>
-              <Background color="#1a1f2e" gap={20} />
-              <Controls style={{ background: "#1a1f2e", border: "1px solid #2d3348" }} />
-              <MiniMap nodeColor={(n) => n.data.role === "orchestrator" ? "#f59e0b" : "#1affd5"} style={{ background: "#0f1117", border: "1px solid #2d3348" }} />
-            </ReactFlow>
-          </div>
-
-          {/* Run Panel */}
-          <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div>
-              <div className="eyebrow">Execute</div>
-              <h2>Run Workflow</h2>
-            </div>
-            <div>
-              <div className="muted-small" style={{ marginBottom: 6 }}>Canvas agents ({nodes.length})</div>
-              {nodes.length === 0
-                ? <div className="muted-small" style={{ fontSize: 11 }}>No agents on canvas yet.</div>
-                : (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
-                    {nodes.map((n) => (
-                      <span key={n.id} style={{ fontSize: 11, background: n.data.role === "orchestrator" ? "#f59e0b18" : "#1affd518", color: n.data.role === "orchestrator" ? "#f59e0b" : "#1affd5", border: `1px solid ${n.data.role === "orchestrator" ? "#f59e0b40" : "#1affd540"}`, borderRadius: 4, padding: "2px 8px" }}>
-                        {n.data.name}
-                      </span>
+              {isOrchestratorForm && (
+                <div>
+                  <div className="muted-small" style={{ marginBottom: 5 }}>Channels</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {AVAILABLE_CHANNELS.map((ch) => (
+                      <label key={ch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, cursor: "pointer" }}>
+                        <input type="checkbox" checked={agentForm.channels.includes(ch)} onChange={() => toggleChannel(ch)} />
+                        {ch}
+                      </label>
                     ))}
                   </div>
-                )
-              }
+                </div>
+              )}
+
+              <input placeholder="Skills (comma-separated)" value={agentForm.skills} onChange={(e) => setAgentForm({ ...agentForm, skills: e.target.value })} />
+              <input placeholder="Cron schedule (optional, e.g. 0 9 * * *)" value={agentForm.schedule} onChange={(e) => setAgentForm({ ...agentForm, schedule: e.target.value })} />
+              <button type="submit" className="primary-btn">＋ Create Agent</button>
+            </form>
+          </SidebarSection>
+
+          <SidebarSection title="Agent Library" badge={agents.length}>
+            {agents.length === 0 && (
+              <div style={{ textAlign: "center", padding: "16px 0" }}>
+                <div style={{ fontSize: 22, marginBottom: 4 }}>🤖</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>No agents yet.</div>
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {agents.map((agent) => {
+                const tools = parseList(agent.tools);
+                const onCanvas = nodes.some((n) => n.id === String(agent.id));
+                return (
+                  <div key={agent.id} style={{ background: "#0f1117", border: `1px solid ${onCanvas ? "#1affd540" : "#2d3348"}`, borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+                          {agent.role === "orchestrator" && (
+                            <span style={{ fontSize: 8, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b30", borderRadius: 2, padding: "0 4px", fontWeight: 700 }}>ORCH</span>
+                          )}
+                          <span style={{ fontWeight: 600, fontSize: 12, color: "#e8e8e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.name}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>{agent.model?.split("-").slice(0, 2).join("-")}</div>
+                        {tools.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                            {tools.slice(0, 3).map((t) => (
+                              <span key={t} style={{ fontSize: 9, background: "#f59e0b15", color: "#f59e0b", border: "1px solid #f59e0b30", borderRadius: 3, padding: "0 4px" }}>{t}</span>
+                            ))}
+                            {tools.length > 3 && <span style={{ fontSize: 9, color: "#6b7280" }}>+{tools.length - 3}</span>}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
+                        <button onClick={() => setEditingAgent(agent)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #2d3348", background: "transparent", color: "#9ca3af", cursor: "pointer" }}>Edit</button>
+                        {onCanvas
+                          ? <button onClick={() => removeAgentFromWorkflow(agent.id)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #1affd540", background: "#1affd510", color: "#1affd5", cursor: "pointer" }}>− Canvas</button>
+                          : <button onClick={() => addAgentToWorkflow(agent)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>+ Canvas</button>
+                        }
+                        <button onClick={() => deleteAgent(agent.id)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>Del</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div>
-              <div className="muted-small" style={{ marginBottom: 6 }}>Input message</div>
-              <textarea rows={4} value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} style={{ fontSize: 12 }} />
+          </SidebarSection>
+        </div>
+
+        {/* CENTER: Canvas + Workflow Controls */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+
+          {/* Canvas toolbar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderBottom: "1px solid #1e2538", flexShrink: 0, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>WORKFLOW CANVAS</span>
+            <span style={{ fontSize: 10, color: "#4b5563" }}>{nodes.length} agent{nodes.length !== 1 ? "s" : ""} · {edges.length} edge{edges.length !== 1 ? "s" : ""}</span>
+            <button onClick={() => { setNodes([]); setEdges([]); setActiveTemplateId(null); }} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer", marginLeft: "auto" }}>Clear</button>
+          </div>
+
+          {/* ReactFlow canvas */}
+          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+            <ReactFlow
+              nodes={nodes} edges={edges}
+              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+              onConnect={onConnect} nodeTypes={nodeTypes}
+              fitView fitViewOptions={{ padding: 0.2 }}
+              style={{ background: "#0d1018" }}
+            >
+              <Background color="#1e2538" gap={20} size={1} />
+              <Controls style={{ background: "#1a1f2e", border: "1px solid #2d3348" }} />
+              <MiniMap nodeColor={(n) => n.data?.role === "orchestrator" ? "#f59e0b" : "#1affd5"} style={{ background: "#0d1018", border: "1px solid #1e2538" }} />
+            </ReactFlow>
+            {nodes.length === 0 && (
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                <div style={{ fontSize: 36, marginBottom: 10, opacity: 0.3 }}>🕸</div>
+                <div style={{ fontSize: 13, color: "#4b5563" }}>Add agents from the library or load a template</div>
+              </div>
+            )}
+          </div>
+
+          {/* Workflow run bar */}
+          <div style={{ padding: "10px 16px", borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
+            <textarea
+              rows={2}
+              value={workflowInput}
+              onChange={(e) => setWorkflowInput(e.target.value)}
+              placeholder="Workflow input / user message…"
+              style={{ resize: "vertical", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button onClick={runWorkflow} disabled={loading} className="primary-btn" style={{ padding: "8px 20px", fontSize: 13 }}>
+                {loading ? "⏳ Running…" : "▶ Run Workflow"}
+              </button>
+              {runError && <span style={{ fontSize: 12, color: "#f87171" }}>⚠ {runError}</span>}
             </div>
-            <button className="primary-btn" onClick={runWorkflow} disabled={loading || nodes.length === 0}>
-              {loading ? "Running…" : "▶ Run Workflow"}
-            </button>
-            {runError && <div style={{ fontSize: 12, color: "#f87171", padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {runError}</div>}
           </div>
         </div>
 
-        {/* ════════════════ BOTTOM PANEL ════════════════ */}
-        <div className="panel" style={{ marginTop: 16, display: "flex", flexDirection: "column", minHeight: 0, height: selectedRunId ? 460 : 280 }}>
+        {/* RIGHT: Templates */}
+        <div style={{ width: 240, borderLeft: "1px solid #1e2538", overflowY: "auto", padding: "14px 14px", flexShrink: 0 }}>
 
-          {/* Bottom tab bar */}
-          <div style={{ display: "flex", gap: 2, borderBottom: "1px solid #2d3348", flexShrink: 0, paddingBottom: 0 }}>
-            <button style={btStyle("runs")} onClick={() => setBottomTab("runs")}>Run History ({runs.length})</button>
-            <button style={btStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor {liveEvents.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, background: "#1affd520", color: "#1affd5", borderRadius: 9, padding: "0 5px" }}>{liveEvents.length}</span>}</button>
-            <button style={btStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
-          </div>
+          <SidebarSection title="Templates" badge={templates.length}>
+            {templateMsg && (
+              <div style={{ fontSize: 11, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171", padding: "5px 8px", background: templateMsg.startsWith("✓") ? "#22c55e10" : "#ef444410", borderRadius: 5, marginBottom: 8, border: `1px solid ${templateMsg.startsWith("✓") ? "#22c55e30" : "#ef444430"}` }}>{templateMsg}</div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+              {templates.length === 0 && <div style={{ fontSize: 11, color: "#6b7280", textAlign: "center", padding: "10px 0" }}>No templates yet.</div>}
+              {templates.map((tpl) => (
+                <div key={tpl.id} style={{ background: "#0f1117", border: `1px solid ${activeTemplateId === tpl.id ? "#1affd540" : "#2d3348"}`, borderRadius: 7, padding: "8px 10px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                        {tpl.is_builtin && <span style={{ fontSize: 8, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b30", borderRadius: 2, padding: "0 4px", fontWeight: 700 }}>BUILT-IN</span>}
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
+                      </div>
+                      {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>{tpl.description}</div>}
+                      <div style={{ fontSize: 10, color: "#4b5563" }}>{tpl.agent_ids?.length ?? 0} agents</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
+                      <button onClick={() => loadTemplate(tpl)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #1affd540", background: "#1affd510", color: "#1affd5", cursor: "pointer" }}>Load</button>
+                      {!tpl.is_builtin && <button onClick={() => deleteTemplate(tpl.id)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>Del</button>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
 
-          {/* ── RUN HISTORY tab ── */}
+            <div style={{ borderTop: "1px solid #1e2538", paddingTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 6 }}>Save Current Canvas</div>
+              <input placeholder="Template name" value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={{ marginBottom: 6 }} />
+              <input placeholder="Description (optional)" value={templateDesc} onChange={(e) => setTemplateDesc(e.target.value)} style={{ marginBottom: 8 }} />
+              <button onClick={saveTemplate} disabled={savingTemplate} className="primary-btn" style={{ width: "100%", fontSize: 12, padding: "7px" }}>{savingTemplate ? "Saving…" : "💾 Save Template"}</button>
+            </div>
+          </SidebarSection>
+        </div>
+      </div>
+
+      {/* ── Bottom panel: Runs / Live Monitor / Scheduled ── */}
+      <div style={{ height: 280, borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid #2d3348", flexShrink: 0, alignItems: "flex-end", paddingTop: 4 }}>
+          <button style={btStyle("runs")} onClick={() => setBottomTab("runs")}>Runs ({runs.length})</button>
+          <button style={btStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor {liveEvents.length > 0 && `(${liveEvents.length})`}</button>
+          <button style={btStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+          {/* RUNS TAB */}
           {bottomTab === "runs" && (
-            <div style={{ display: "grid", gridTemplateColumns: selectedRunId ? "280px 1fr" : "1fr", gap: 0, flex: 1, minHeight: 0 }}>
-
+            <div style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0 }}>
               {/* Run list */}
-              <div style={{ borderRight: selectedRunId ? "1px solid #2d3348" : "none", overflowY: "auto", padding: "10px 10px 10px 0", display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ width: 320, overflowY: "auto", padding: "10px 12px", borderRight: "1px solid #1e2538", display: "flex", flexDirection: "column", gap: 6 }}>
                 {runs.length === 0 && (
                   <div style={{ textAlign: "center", paddingTop: 24 }}>
-                    <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
-                    <div className="muted-small" style={{ fontSize: 12 }}>No runs yet. Load a template and hit Run.</div>
+                    <div style={{ fontSize: 24, marginBottom: 6 }}>🚀</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>No runs yet. Run a workflow!</div>
                   </div>
                 )}
-                {runs.map((run) => <RunCard key={run.id} run={run} />)}
+                {[...runs].reverse().map((run) => <RunCard key={run.id} run={run} />)}
               </div>
-
               {/* Run detail */}
-              {selectedRun && messages.length >= 0 && (
-                <RunDetailPanel
-                  run={selectedRun}
-                  messages={messages}
-                  nodes={nodes}
-                  onClose={() => setSelectedRunId(null)}
-                />
-              )}
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+                {selectedRun
+                  ? <RunDetailPanel
+                      run={selectedRun}
+                      messages={messages}
+                      agentCount={selectedRunAgentCount}
+                      onClose={() => setSelectedRunId(null)}
+                    />
+                  : (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#4b5563" }}>
+                      <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
+                      <div style={{ fontSize: 12 }}>Select a run to view details</div>
+                    </div>
+                  )
+                }
+              </div>
             </div>
           )}
 
-          {/* ── LIVE MONITOR tab ── */}
+          {/* MONITOR TAB */}
           {bottomTab === "monitor" && (
-            <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "10px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 600 }}>Live WebSocket events (last 50)</span>
+                <button onClick={() => setLiveEvents([])} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>Clear</button>
+              </div>
               {liveEvents.length === 0 && (
                 <div style={{ textAlign: "center", paddingTop: 24 }}>
-                  <div style={{ fontSize: 24, marginBottom: 8 }}>📡</div>
-                  <div className="muted-small" style={{ fontSize: 12 }}>Listening for live events…</div>
+                  <div style={{ fontSize: 22, marginBottom: 6 }}>📡</div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>Waiting for events…</div>
                 </div>
               )}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {liveEvents.map((evt, i) => (
-                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "6px 8px", background: i === 0 ? "#1affd50a" : "transparent", borderRadius: 5, borderBottom: "1px solid #1e2538" }}>
-                    <span style={{ fontSize: 10, color: "#6b7280", flexShrink: 0, marginTop: 2, fontFamily: "monospace" }}>{fmtTime(evt.timestamp || evt.created_at)}</span>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: ({ input: "#0ea5e9", output: "#22c55e", tool_call: "#f59e0b", agent_message: "#8b5cf6" }[evt.type] || "#6b7280") + "22", color: ({ input: "#0ea5e9", output: "#22c55e", tool_call: "#f59e0b", agent_message: "#8b5cf6" }[evt.type] || "#6b7280"), flexShrink: 0 }}>{evt.type || "event"}</span>
-                    {evt.agent && <span style={{ fontSize: 10, color: "#f59e0b", fontWeight: 600, flexShrink: 0 }}>{evt.agent}</span>}
-                    <span style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                      {typeof evt.content === "string" ? evt.content : JSON.stringify(evt.content)}
-                    </span>
+                {liveEvents.map((ev, i) => (
+                  <div key={i} style={{ background: "#0f1117", borderRadius: 6, border: "1px solid #1e2538", padding: "5px 10px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <span style={{ fontSize: 10, color: "#4b5563", flexShrink: 0, marginTop: 1 }}>{new Date(ev.timestamp || Date.now()).toLocaleTimeString()}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: ev.type === "error" ? "#ef4444" : ev.type === "output" ? "#22c55e" : "#1affd5", flexShrink: 0 }}>{ev.type}</span>
+                    {ev.agent && <span style={{ fontSize: 10, color: "#f59e0b", flexShrink: 0 }}>{ev.agent}</span>}
+                    <span style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{typeof ev.content === "string" ? ev.content : JSON.stringify(ev.content)}</span>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* ── SCHEDULED JOBS tab ── */}
+          {/* SCHEDULED JOBS TAB */}
           {bottomTab === "scheduled" && (
-            <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "10px 16px" }}>
               <ScheduledJobsPanel />
             </div>
           )}
         </div>
-      </main>
+      </div>
+
+      {/* Edit Agent Modal */}
+      {editingAgent && (
+        <EditAgentModal
+          agent={editingAgent}
+          onClose={() => setEditingAgent(null)}
+          onSaved={handleAgentSaved}
+        />
+      )}
+
+      <style>{`
+        * { box-sizing: border-box; }
+        input, textarea {
+          width: 100%; background: #0f1117; color: #e8e8e8;
+          border: 1px solid #2d3348; border-radius: 6px;
+          padding: 7px 10px; font-size: 13px; font-family: inherit;
+          transition: border-color 0.15s;
+        }
+        input:focus, textarea:focus { outline: none; border-color: #1affd560; }
+        .primary-btn {
+          background: #1affd515; color: #1affd5;
+          border: 1px solid #1affd540; border-radius: 6px;
+          cursor: pointer; font-weight: 600; font-size: 13px;
+          transition: background 0.15s, border-color 0.15s;
+        }
+        .primary-btn:hover:not(:disabled) { background: #1affd525; border-color: #1affd570; }
+        .primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .muted-small { font-size: 11px; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+        .form-grid { display: flex; flex-direction: column; gap: 12px; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2d3348; border-radius: 2px; }
+      `}</style>
     </div>
   );
 }
