@@ -97,6 +97,13 @@ function EditAgentModal({ agent, onClose, onSaved }) {
       ? agent.forbidden_topics.join(", ")
       : (agent.forbidden_topics || ""),
     max_output_chars: agent.max_output_chars ?? "",
+    // Capability fields
+    skills: Array.isArray(agent.skills)
+      ? agent.skills.join(", ")
+      : (agent.skills || ""),
+    interaction_rules: Array.isArray(agent.interaction_rules)
+      ? agent.interaction_rules.join("\n")
+      : (agent.interaction_rules || ""),
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -120,6 +127,13 @@ function EditAgentModal({ agent, onClose, onSaved }) {
           : [],
         max_output_chars: form.max_output_chars ? parseInt(form.max_output_chars, 10) : null,
         channels: isOrch ? form.channels : [],
+        // Parse comma-separated skills and newline-separated interaction_rules
+        skills: form.skills
+          ? form.skills.split(",").map((s) => s.trim()).filter(Boolean)
+          : [],
+        interaction_rules: form.interaction_rules
+          ? form.interaction_rules.split("\n").map((s) => s.trim()).filter(Boolean)
+          : [],
       };
       await axios.patch(`${API_BASE}/agents/${agent.id}`, payload);
       onSaved();
@@ -203,6 +217,24 @@ function EditAgentModal({ agent, onClose, onSaved }) {
           <div>
             <div className="muted-small" style={{ marginBottom: 4 }}>Forbidden Topics <span style={{ color: "#6b7280", fontSize: 10 }}>(comma-separated)</span></div>
             <input value={form.forbidden_topics} onChange={(e) => setForm({ ...form, forbidden_topics: e.target.value })} placeholder="e.g. violence, politics" />
+          </div>
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>Skills <span style={{ color: "#6b7280", fontSize: 10 }}>(comma-separated — used by orchestrator for routing)</span></div>
+            <input
+              value={form.skills}
+              onChange={(e) => setForm({ ...form, skills: e.target.value })}
+              placeholder="e.g. summarisation, code_review, translation"
+            />
+          </div>
+          <div>
+            <div className="muted-small" style={{ marginBottom: 4 }}>Interaction Rules <span style={{ color: "#6b7280", fontSize: 10 }}>(one rule per line)</span></div>
+            <textarea
+              rows={3}
+              value={form.interaction_rules}
+              onChange={(e) => setForm({ ...form, interaction_rules: e.target.value })}
+              placeholder="e.g. always reply in bullet points&#10;respond only in English"
+              style={{ resize: "vertical" }}
+            />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div>
@@ -446,6 +478,7 @@ export default function App() {
     is_active: true, max_iterations: 5,
     memory_enabled: true, schedule: "",
     forbidden_topics: "", max_output_chars: "",
+    skills: "",
   });
 
   const [workflowInput, setWorkflowInput] = useState(
@@ -500,6 +533,10 @@ export default function App() {
         : [],
       max_output_chars: agentForm.max_output_chars ? parseInt(agentForm.max_output_chars, 10) : null,
       channels: isOrchestratorForm ? agentForm.channels : [],
+      // Parse comma-separated skills string into array
+      skills: agentForm.skills
+        ? agentForm.skills.split(",").map((s) => s.trim()).filter(Boolean)
+        : [],
     };
     await axios.post(`${API_BASE}/agents`, payload);
     setAgentForm({
@@ -509,6 +546,7 @@ export default function App() {
       is_active: true, max_iterations: 5,
       memory_enabled: true, schedule: "",
       forbidden_topics: "", max_output_chars: "",
+      skills: "",
     });
     await loadAgents();
   }
@@ -734,6 +772,11 @@ export default function App() {
             ) : null}
             <input placeholder="Forbidden topics (comma-separated)" value={agentForm.forbidden_topics}
               onChange={(e) => setAgentForm({ ...agentForm, forbidden_topics: e.target.value })} />
+            <input
+              placeholder="Skills (comma-separated, e.g. summarisation, code_review)"
+              value={agentForm.skills}
+              onChange={(e) => setAgentForm({ ...agentForm, skills: e.target.value })}
+            />
             <input type="number" placeholder="Max output chars (optional)" value={agentForm.max_output_chars}
               onChange={(e) => setAgentForm({ ...agentForm, max_output_chars: e.target.value })} />
             <input type="number" min="1" max="20" placeholder="Max iterations"
@@ -961,10 +1004,11 @@ export default function App() {
                           color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b",
                         }}>{run.status}</span>
                       </div>
-                      <div className="muted-small" style={{ fontSize: 11 }}>{run.user_input?.slice(0, 80)}{run.user_input?.length > 80 ? "..." : ""}</div>
+                      <div className="muted-small" style={{ fontSize: 11 }}>{run.input_text?.slice(0, 80)}{run.input_text?.length > 80 ? "..." : ""}</div>
                       <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#6b7280" }}>
                         {run.total_tokens ? <span>🔢 {run.total_tokens} tokens</span> : null}
-                        {run.total_cost_usd ? <span>💰 ${run.total_cost_usd.toFixed(4)}</span> : null}
+                        {/* FIX: API returns estimated_cost_usd, not total_cost_usd */}
+                        {run.estimated_cost_usd ? <span>💰 ${run.estimated_cost_usd.toFixed(4)}</span> : null}
                         {run.created_at ? <span>🕐 {new Date(run.created_at).toLocaleTimeString()}</span> : null}
                       </div>
                     </div>

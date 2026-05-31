@@ -31,6 +31,9 @@ def serialize_agent(agent) -> AgentRead:
         schedule_prompt=agent.schedule_prompt,
         forbidden_topics=json.loads(agent.forbidden_topics or "[]"),
         max_output_chars=agent.max_output_chars,
+        # Capability fields — were missing from serialization
+        skills=json.loads(agent.skills or "[]"),
+        interaction_rules=json.loads(agent.interaction_rules or "[]"),
     )
 
 
