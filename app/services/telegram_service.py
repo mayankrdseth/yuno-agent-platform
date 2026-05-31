@@ -1,4 +1,6 @@
+import html
 import logging
+import re
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -11,6 +13,15 @@ settings = get_settings()
 _application: Application | None = None
 
 GREETING_INPUTS = {"/start", "start", "hi", "hello", "hey", "help"}
+
+
+def _safe_html(text: str) -> str:
+    """Escape text for Telegram HTML parse_mode.
+
+    Telegram HTML only supports <b>, <i>, <code>, <pre>, <a>.
+    Escape everything else so arbitrary LLM output never breaks sending.
+    """
+    return html.escape(str(text), quote=False)
 
 
 def get_telegram_app() -> Application:
@@ -56,7 +67,6 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     session_key = f"telegram_{chat_id}"
 
     async with AsyncSessionLocal() as db:
-        # Clear memory for all orchestrator agents for this session
         result = await db.execute(
             select(Agent).where(Agent.role == "orchestrator", Agent.is_active == True)  # noqa: E712
         )
@@ -99,14 +109,14 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    lines = ["🧠 *Here's what I remember from our conversation:*\n"]
+    lines = ["🧠 <b>Here's what I remember from our conversation:</b>\n"]
     for m in turns:
         prefix = "👤 You" if m["role"] == "human" else "🤖 Me"
-        content = m["content"][:200] + ("..." if len(m["content"]) > 200 else "")
+        content = _safe_html(m["content"][:200] + ("..." if len(m["content"]) > 200 else ""))
         lines.append(f"{prefix}: {content}")
-    lines.append("\n_Use /forget to clear this memory._")
+    lines.append("\n<i>Use /forget to clear this memory.</i>")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -131,19 +141,19 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     scheduler = get_scheduler()
-    lines = ["📅 *Active Schedules:*\n"]
+    lines = ["📅 <b>Active Schedules:</b>\n"]
     for agent in scheduled_agents:
         job_id = f"agent_schedule_{agent.id}"
         job = scheduler.get_job(job_id)
         next_run = str(job.next_run_time) if job and job.next_run_time else "unknown"
         lines.append(
-            f"• *{agent.name}*\n"
-            f"  Cron: `{agent.schedule}`\n"
-            f"  Task: {agent.schedule_prompt[:80]}\n"
-            f"  Next run: {next_run}\n"
+            f"• <b>{_safe_html(agent.name)}</b>\n"
+            f"  Cron: <code>{_safe_html(agent.schedule)}</code>\n"
+            f"  Task: {_safe_html(agent.schedule_prompt[:80])}\n"
+            f"  Next run: {_safe_html(next_run)}\n"
         )
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def unschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -218,12 +228,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if run_obj:
                 await complete_run(db, run_obj, result["final_response"])
 
-            # Handle schedule confirmation response
+            # ── Schedule confirmation ──────────────────────────────────────
             schedule_intent = result.get("schedule_intent")
             if schedule_intent:
                 from app.services.scheduler_service import get_scheduler
                 scheduler = get_scheduler()
-                # Find the orchestrator to get next run time
                 from app.models.agent import Agent
                 from sqlalchemy import select
                 orch_result = await db.execute(
@@ -237,30 +246,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         next_run = str(job.next_run_time)
 
                 await update.message.reply_text(
-                    f"✅ *Schedule set!*\n\n"
-                    f"Cron: `{schedule_intent['cron']}`\n"
-                    f"Task: {schedule_intent['prompt']}\n"
-                    f"Next run: {next_run}\n\n"
+                    f"✅ <b>Schedule set!</b>\n\n"
+                    f"Cron: <code>{_safe_html(schedule_intent['cron'])}</code>\n"
+                    f"Task: {_safe_html(schedule_intent['prompt'])}\n"
+                    f"Next run: {_safe_html(next_run)}\n\n"
                     f"Use /schedule to view all schedules\n"
                     f"Use /unschedule to cancel",
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                 )
                 return
 
+            # ── Normal response ────────────────────────────────────────────
             routed_to = result.get("routing_decision", "agent")
             reason = result.get("routing_reason", "")
             tool_calls = result.get("tool_calls", [])
 
-            lines = [f"✅ *Workflow complete* — handled by *{routed_to}*"]
+            # Build header in HTML (safe, no LLM content here)
+            header_lines = [f"✅ <b>Workflow complete</b> — handled by <b>{_safe_html(routed_to)}</b>"]
             if reason:
-                lines.append(f"_Reason: {reason}_")
+                header_lines.append(f"<i>Reason: {_safe_html(reason)}</i>")
             if tool_calls:
-                tools_used = ", ".join(tc["tool"] for tc in tool_calls)
-                lines.append(f"🔧 Tools used: {tools_used}")
-            lines.append("")
-            lines.append(result["final_response"])
+                tools_used = ", ".join(tc.get("tool", "?") for tc in tool_calls)
+                header_lines.append(f"🔧 Tools used: <code>{_safe_html(tools_used)}</code>")
 
-            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            header = "\n".join(header_lines)
+
+            # LLM response: escape all HTML special chars so it renders as
+            # plain text inside the HTML message — no parse errors possible.
+            body = _safe_html(result["final_response"])
+
+            full_message = f"{header}\n\n{body}"
+
+            # Telegram messages cap at 4096 chars
+            if len(full_message) > 4096:
+                full_message = full_message[:4090] + "…"
+
+            await update.message.reply_text(full_message, parse_mode="HTML")
 
         except Exception as exc:
             logger.exception("Workflow error for run %s: %s", run.id, exc)
