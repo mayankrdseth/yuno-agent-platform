@@ -75,6 +75,11 @@ Schedule Detection
   If schedule_intent is non-null, the graph short-circuits and returns without
   running a specialist — the caller handles job registration.
 
+  Timezone for cron expressions is controlled by the SCHEDULER_TIMEZONE env var
+  (default: UTC).  The LLM is told this timezone in the routing prompt so it
+  emits cron times in the correct local time rather than always UTC.
+  Set SCHEDULER_TIMEZONE=Asia/Kolkata in .env for IST deployments.
+
 Guardrails
 ----------
   - forbidden_topics : list[str]
@@ -95,6 +100,7 @@ from typing import Any, Union
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
+from app.core.config import get_settings
 from app.runtime.llm import get_llm
 from app.runtime.state import TokenUsage, WorkflowState
 from app.runtime.tools import format_tools_for_prompt, get_tools_for_agent
@@ -307,12 +313,16 @@ async def llm_route_and_detect(
 ) -> tuple[dict[str, Any], TokenUsage]:
     """
     Combined orchestrator LLM call:
-      1. Detects schedule intent
+      1. Detects schedule intent (cron times expressed in SCHEDULER_TIMEZONE)
       2. Routes to one OR multiple specialists
       3. Builds memory_context to pass to the specialist(s)
       4. Uses skills labels for richer routing signal
     """
     llm = get_llm(model) if model else get_llm()
+
+    # Read the configured timezone once — used in the prompt so the LLM emits
+    # cron expressions in the correct local time instead of always UTC.
+    scheduler_tz = get_settings().scheduler_timezone
 
     agent_list_lines = []
     for a in specialist_agents:
@@ -348,6 +358,11 @@ async def llm_route_and_detect(
         "(phrases like 'every day', 'every morning', 'weekly', 'remind me at', "
         "'schedule this', 'run this at', 'every Monday' etc.).\n"
         "   If yes: extract the cron expression and the actual task prompt.\n"
+        f"   IMPORTANT: All cron expressions MUST be in the '{scheduler_tz}' timezone. "
+        "Convert any time the user mentions to that timezone before generating the cron. "
+        f"For example, if the user says '5:12 PM IST' and the timezone is '{scheduler_tz}', "
+        "emit the cron for 17:12 in that timezone (do NOT convert to UTC unless "
+        f"'{scheduler_tz}' is UTC).\n"
         "   If no: set schedule_intent to null.\n"
         "2. Decide if this is a COMPOUND query that clearly requires multiple specialists "
         "(e.g. 'What is 2+2 AND summarise this article'). "
@@ -370,7 +385,7 @@ async def llm_route_and_detect(
         "{\n"
         '  "target": "<agent_name>",\n'
         '  "reason": "<short reason>",\n'
-        '  "schedule_intent": {"cron": "<cron_expression>", "prompt": "<task to run on schedule>"}\n'
+        f'  "schedule_intent": {{"cron": "<cron_expression in {scheduler_tz}>", "prompt": "<task to run on schedule>"}}\n'
         "}\n\n"
         f"Available agents (name: role | skills — system_prompt excerpt):\n{agent_list}\n\n"
         f"User request: {user_input}"
@@ -477,9 +492,10 @@ def build_agent_graph(
     # ── Schedule terminal node ────────────────────────────────────────────────
     async def schedule_end_node(state: WorkflowState) -> WorkflowState:
         intent = state["schedule_intent"]
+        tz = get_settings().scheduler_timezone
         state["final_response"] = (
             f"\u2705 Got it! I'll schedule this for you.\n"
-            f"Cron: `{intent['cron']}`\n"
+            f"Cron: `{intent['cron']}` ({tz})\n"
             f"Task: {intent['prompt']}"
         )
         state["status"]       = "scheduled"
