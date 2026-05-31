@@ -352,7 +352,6 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
   ];
 
   const typeColor = { input: "#0ea5e9", output: "#22c55e", log: "#6b7280", agent_message: "#8b5cf6", tool_call: "#f59e0b", error: "#ef4444" };
-  const typeIcon = { input: "→", output: "←", log: "·", agent_message: "💬", tool_call: "🔧", error: "✕" };
 
   function Tag({ type }) {
     return (
@@ -370,7 +369,6 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
     );
   }
 
-  /* ── Stats tile data — all derived from props, no external refs ── */
   const statsData = [
     { label: "Status", value: run.status ?? "—", color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b" },
     { label: "Run ID", value: `#${run.id}` },
@@ -390,51 +388,48 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid #2d3348", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: run.status === "completed" ? "#22c55e22" : run.status === "failed" ? "#ef444422" : "#f59e0b22", color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b", border: `1px solid ${run.status === "completed" ? "#22c55e44" : run.status === "failed" ? "#ef444444" : "#f59e0b44"}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderBottom: "1px solid #2d3348", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: run.status === "completed" ? "#22c55e22" : run.status === "failed" ? "#ef444422" : "#f59e0b22", color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b", border: `1px solid ${run.status === "completed" ? "#22c55e44" : run.status === "failed" ? "#ef444444" : "#f59e0b44"}` }}>
             {run.status?.toUpperCase()}
           </span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#e8e8e8" }}>Run #{run.id}</span>
-          <span style={{ fontSize: 11, color: "#6b7280" }}>{run.created_at ? new Date(run.created_at).toLocaleString() : ""}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8" }}>Run #{run.id}</span>
         </div>
-        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "2px 6px" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 14, padding: "2px 4px" }}>✕</button>
       </div>
 
       {/* Input preview */}
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid #2d3348", flexShrink: 0, background: "#0f111788" }}>
+      <div style={{ padding: "6px 12px", borderBottom: "1px solid #2d3348", flexShrink: 0, background: "#0f111788" }}>
         <span style={{ fontSize: 10, color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Input: </span>
-        <span style={{ fontSize: 12, color: "#9ca3af" }}>{run.input_text || "—"}</span>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>{run.input_text || "—"}</span>
       </div>
 
       {/* Sub-tabs */}
-      <div style={{ display: "flex", gap: 2, padding: "8px 16px 0", borderBottom: "1px solid #2d3348", flexShrink: 0 }}>
+      <div style={{ display: "flex", gap: 1, padding: "6px 12px 0", borderBottom: "1px solid #2d3348", flexShrink: 0, overflowX: "auto" }}>
         {TABS.map(({ id, label }) => (
-          <button key={id} onClick={() => setTab(id)} style={{ fontSize: 11, fontWeight: tab === id ? 700 : 500, padding: "5px 12px", borderRadius: "5px 5px 0 0", border: tab === id ? "1px solid #2d3348" : "1px solid transparent", borderBottom: tab === id ? "1px solid #0f1117" : "1px solid transparent", background: tab === id ? "#0f1117" : "transparent", color: tab === id ? "#e8e8e8" : "#6b7280", cursor: "pointer", marginBottom: -1, transition: "color 0.15s" }}>
+          <button key={id} onClick={() => setTab(id)} style={{ fontSize: 10, fontWeight: tab === id ? 700 : 500, padding: "4px 8px", borderRadius: "4px 4px 0 0", border: tab === id ? "1px solid #2d3348" : "1px solid transparent", borderBottom: tab === id ? "1px solid #0f1117" : "1px solid transparent", background: tab === id ? "#0f1117" : "transparent", color: tab === id ? "#e8e8e8" : "#6b7280", cursor: "pointer", marginBottom: -1, transition: "color 0.15s", whiteSpace: "nowrap" }}>
             {label}
           </button>
         ))}
       </div>
 
       {/* Tab content */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px" }}>
 
-        {/* TIMELINE */}
         {tab === "timeline" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {timeline.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", paddingTop: 24 }}>No events recorded.</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {timeline.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", paddingTop: 20 }}>No events recorded.</div>}
             {timeline.map((m, i) => (
-              <div key={m.id || i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                {/* Timeline spine */}
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 20 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: typeColor[m.message_type] || "#6b7280", marginTop: 4, flexShrink: 0 }} />
-                  {i < timeline.length - 1 && <div style={{ width: 1, flex: 1, minHeight: 12, background: "#2d3348", margin: "2px 0" }} />}
+              <div key={m.id || i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 16 }}>
+                  <div style={{ width: 7, height: 7, borderRadius: "50%", background: typeColor[m.message_type] || "#6b7280", marginTop: 4, flexShrink: 0 }} />
+                  {i < timeline.length - 1 && <div style={{ width: 1, flex: 1, minHeight: 10, background: "#2d3348", margin: "2px 0" }} />}
                 </div>
-                <div style={{ flex: 1, minWidth: 0, padding: "4px 10px 8px", background: "#0f1117", borderRadius: 6, border: "1px solid #2d3348" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 0, padding: "3px 8px 6px", background: "#0f1117", borderRadius: 5, border: "1px solid #2d3348" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
                     <Tag type={m.message_type} />
-                    {m.agent_name && <span style={{ fontSize: 11, color: "#f59e0b", fontWeight: 600 }}>{m.agent_name}</span>}
-                    {m.created_at && <span style={{ fontSize: 10, color: "#6b7280", marginLeft: "auto" }}>{fmtTime(m.created_at)}</span>}
+                    {m.agent_name && <span style={{ fontSize: 10, color: "#f59e0b", fontWeight: 600 }}>{m.agent_name}</span>}
+                    {m.created_at && <span style={{ fontSize: 9, color: "#6b7280", marginLeft: "auto" }}>{fmtTime(m.created_at)}</span>}
                   </div>
                   {renderContent(m.content)}
                 </div>
@@ -443,16 +438,15 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
           </div>
         )}
 
-        {/* MESSAGES */}
         {tab === "messages" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {agentMessages.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", paddingTop: 24 }}>No agent messages.</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {agentMessages.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", paddingTop: 20 }}>No agent messages.</div>}
             {agentMessages.map((m, i) => (
-              <div key={m.id || i} style={{ padding: "10px 12px", background: "#0f1117", borderRadius: 8, border: "1px solid #2d3348" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <div key={m.id || i} style={{ padding: "8px 10px", background: "#0f1117", borderRadius: 6, border: "1px solid #2d3348" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, flexWrap: "wrap" }}>
                   <Tag type={m.message_type} />
-                  {m.agent_name && <span style={{ fontSize: 11, color: "#f59e0b", fontWeight: 600 }}>{m.agent_name}</span>}
-                  {m.created_at && <span style={{ fontSize: 10, color: "#6b7280", marginLeft: "auto" }}>{fmtTime(m.created_at)}</span>}
+                  {m.agent_name && <span style={{ fontSize: 10, color: "#f59e0b", fontWeight: 600 }}>{m.agent_name}</span>}
+                  {m.created_at && <span style={{ fontSize: 9, color: "#6b7280", marginLeft: "auto" }}>{fmtTime(m.created_at)}</span>}
                 </div>
                 {renderContent(m.content)}
               </div>
@@ -460,32 +454,31 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
           </div>
         )}
 
-        {/* TOOL CALLS */}
         {tab === "tools" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {toolCalls.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", paddingTop: 24 }}>No tool calls in this run.</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {toolCalls.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", paddingTop: 20 }}>No tool calls in this run.</div>}
             {toolCalls.map((m, i) => {
               let parsed = null;
               try { parsed = typeof m.content === "string" ? JSON.parse(m.content) : m.content; } catch {}
               return (
-                <div key={m.id || i} style={{ background: "#0f1117", borderRadius: 8, border: "1px solid #f59e0b33", overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#f59e0b0a", borderBottom: "1px solid #f59e0b22" }}>
-                    <span style={{ fontSize: 13 }}>🔧</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>{parsed?.tool || m.agent_name || "tool_call"}</span>
-                    {m.agent_name && <span style={{ fontSize: 10, color: "#6b7280" }}>via {m.agent_name}</span>}
-                    {m.created_at && <span style={{ fontSize: 10, color: "#6b7280", marginLeft: "auto" }}>{fmtTime(m.created_at)}</span>}
+                <div key={m.id || i} style={{ background: "#0f1117", borderRadius: 7, border: "1px solid #f59e0b33", overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#f59e0b0a", borderBottom: "1px solid #f59e0b22" }}>
+                    <span style={{ fontSize: 12 }}>🔧</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b" }}>{parsed?.tool || m.agent_name || "tool_call"}</span>
+                    {m.agent_name && <span style={{ fontSize: 9, color: "#6b7280" }}>via {m.agent_name}</span>}
+                    {m.created_at && <span style={{ fontSize: 9, color: "#6b7280", marginLeft: "auto" }}>{fmtTime(m.created_at)}</span>}
                   </div>
-                  <div style={{ padding: "8px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ padding: "6px 10px", display: "flex", flexDirection: "column", gap: 5 }}>
                     {parsed?.input != null && (
                       <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>Input</div>
-                        <pre style={{ margin: 0, fontSize: 12, color: "#9ca3af", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{typeof parsed.input === "string" ? parsed.input : JSON.stringify(parsed.input, null, 2)}</pre>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>Input</div>
+                        <pre style={{ margin: 0, fontSize: 11, color: "#9ca3af", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{typeof parsed.input === "string" ? parsed.input : JSON.stringify(parsed.input, null, 2)}</pre>
                       </div>
                     )}
                     {parsed?.output != null && (
                       <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#22c55e", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>Result</div>
-                        <pre style={{ margin: 0, fontSize: 12, color: "#d1d5db", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{typeof parsed.output === "string" ? parsed.output : JSON.stringify(parsed.output, null, 2)}</pre>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: "#22c55e", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>Result</div>
+                        <pre style={{ margin: 0, fontSize: 11, color: "#d1d5db", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{typeof parsed.output === "string" ? parsed.output : JSON.stringify(parsed.output, null, 2)}</pre>
                       </div>
                     )}
                     {!parsed && renderContent(m.content)}
@@ -496,13 +489,12 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
           </div>
         )}
 
-        {/* STATS */}
         {tab === "stats" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10, paddingTop: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, paddingTop: 2 }}>
             {statsData.map(({ label, value, color }) => (
-              <div key={label} style={{ background: "#0f1117", borderRadius: 8, border: "1px solid #2d3348", padding: "10px 14px" }}>
-                <div style={{ fontSize: 10, color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: color || "#e8e8e8" }}>{String(value ?? "—")}</div>
+              <div key={label} style={{ background: "#0f1117", borderRadius: 6, border: "1px solid #2d3348", padding: "8px 10px" }}>
+                <div style={{ fontSize: 9, color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>{label}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: color || "#e8e8e8", wordBreak: "break-all" }}>{String(value ?? "—")}</div>
               </div>
             ))}
           </div>
@@ -583,7 +575,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [runError, setRunError] = useState("");
   const [editingAgent, setEditingAgent] = useState(null);
-  const [bottomTab, setBottomTab] = useState("runs");
+  const [bottomTab, setBottomTab] = useState("monitor");
 
   const [templates, setTemplates] = useState([]);
   const [activeTemplateId, setActiveTemplateId] = useState(null);
@@ -766,10 +758,8 @@ export default function App() {
 
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
 
-  /* Derive agentCount for the selected run from canvas nodes */
   const selectedRunAgentCount = useMemo(() => {
     if (!selectedRunId) return 0;
-    // If the canvas still has agents loaded, use that count; otherwise fall back to 0
     return nodes.length > 0 ? nodes.length : 0;
   }, [selectedRunId, nodes]);
 
@@ -799,30 +789,27 @@ export default function App() {
         style={{
           width: "100%", textAlign: "left", background: isActive ? "rgba(26,255,213,0.06)" : "#0f1117",
           border: `1px solid ${isActive ? "#1affd560" : "#2d3348"}`,
-          borderRadius: 8, padding: "10px 12px", cursor: "pointer", color: "#e8e8e8",
+          borderRadius: 8, padding: "8px 10px", cursor: "pointer", color: "#e8e8e8",
           transition: "border-color 0.15s, background 0.15s",
         }}
       >
-        {/* Row 1: status + run id + time */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: statusColor, flexShrink: 0, display: "inline-block" }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: statusColor }}>{run.status?.toUpperCase()}</span>
-          <span style={{ fontSize: 11, color: "#6b7280" }}>#{run.id}</span>
-          <span style={{ fontSize: 10, color: "#4b5563", marginLeft: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusColor, flexShrink: 0, display: "inline-block" }} />
+          <span style={{ fontSize: 10, fontWeight: 700, color: statusColor }}>{run.status?.toUpperCase()}</span>
+          <span style={{ fontSize: 10, color: "#6b7280" }}>#{run.id}</span>
+          <span style={{ fontSize: 9, color: "#4b5563", marginLeft: "auto" }}>
             {run.created_at ? new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
           </span>
         </div>
-        {/* Row 2: input preview */}
         {run.input_text && (
-          <div style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 5 }}>
+          <div style={{ fontSize: 10, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 4 }}>
             {run.input_text}
           </div>
         )}
-        {/* Row 3: pills */}
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {duration && <span style={{ fontSize: 10, background: "#1affd515", color: "#1affd5", border: "1px solid #1affd530", borderRadius: 3, padding: "1px 6px" }}>⏱ {duration}</span>}
-          {run.total_tokens > 0 && <span style={{ fontSize: 10, background: "#8b5cf615", color: "#8b5cf6", border: "1px solid #8b5cf630", borderRadius: 3, padding: "1px 6px" }}>🔢 {run.total_tokens.toLocaleString()} tok</span>}
-          {cost && <span style={{ fontSize: 10, background: "#22c55e15", color: "#22c55e", border: "1px solid #22c55e30", borderRadius: 3, padding: "1px 6px" }}>{cost}</span>}
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {duration && <span style={{ fontSize: 9, background: "#1affd515", color: "#1affd5", border: "1px solid #1affd530", borderRadius: 3, padding: "1px 5px" }}>⏱ {duration}</span>}
+          {run.total_tokens > 0 && <span style={{ fontSize: 9, background: "#8b5cf615", color: "#8b5cf6", border: "1px solid #8b5cf630", borderRadius: 3, padding: "1px 5px" }}>🔢 {run.total_tokens.toLocaleString()} tok</span>}
+          {cost && <span style={{ fontSize: 9, background: "#22c55e15", color: "#22c55e", border: "1px solid #22c55e30", borderRadius: 3, padding: "1px 5px" }}>{cost}</span>}
         </div>
       </button>
     );
@@ -858,7 +845,7 @@ export default function App() {
       {/* ── Main 3-column layout ── */}
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
 
-        {/* LEFT: Agent Library */}
+        {/* ── LEFT: Agent Library ── */}
         <div style={{ width: 260, borderRight: "1px solid #1e2538", overflowY: "auto", padding: "14px 16px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 0 }}>
 
           <SidebarSection title="Create Agent">
@@ -872,7 +859,6 @@ export default function App() {
               <select value={agentForm.model} onChange={(e) => setAgentForm({ ...agentForm, model: e.target.value })} style={{ background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "7px 10px", fontSize: 13 }}>
                 {AVAILABLE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
-
               <div>
                 <div className="muted-small" style={{ marginBottom: 5 }}>
                   Tools
@@ -890,7 +876,6 @@ export default function App() {
                   })}
                 </div>
               </div>
-
               {isOrchestratorForm && (
                 <div>
                   <div className="muted-small" style={{ marginBottom: 5 }}>Channels</div>
@@ -904,7 +889,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-
               <input placeholder="Skills (comma-separated)" value={agentForm.skills} onChange={(e) => setAgentForm({ ...agentForm, skills: e.target.value })} />
               <input placeholder="Cron schedule (optional, e.g. 0 9 * * *)" value={agentForm.schedule} onChange={(e) => setAgentForm({ ...agentForm, schedule: e.target.value })} />
               <button type="submit" className="primary-btn">＋ Create Agent</button>
@@ -958,7 +942,7 @@ export default function App() {
           </SidebarSection>
         </div>
 
-        {/* CENTER: Canvas + Workflow Controls */}
+        {/* ── CENTER: Canvas + Workflow Controls ── */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
 
           {/* Canvas toolbar */}
@@ -989,7 +973,7 @@ export default function App() {
             )}
           </div>
 
-          {/* Workflow run bar */}
+          {/* ── Workflow run bar (below canvas) ── */}
           <div style={{ padding: "10px 16px", borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
             <textarea
               rows={2}
@@ -1007,59 +991,64 @@ export default function App() {
           </div>
         </div>
 
-        {/* RIGHT: Templates */}
-        <div style={{ width: 240, borderLeft: "1px solid #1e2538", overflowY: "auto", padding: "14px 14px", flexShrink: 0 }}>
+        {/* ── RIGHT: Workflow Templates + Run History ── */}
+        <div style={{ width: 300, borderLeft: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0, minHeight: 0 }}>
 
-          <SidebarSection title="Templates" badge={templates.length}>
-            {templateMsg && (
-              <div style={{ fontSize: 11, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171", padding: "5px 8px", background: templateMsg.startsWith("✓") ? "#22c55e10" : "#ef444410", borderRadius: 5, marginBottom: 8, border: `1px solid ${templateMsg.startsWith("✓") ? "#22c55e30" : "#ef444430"}` }}>{templateMsg}</div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-              {templates.length === 0 && <div style={{ fontSize: 11, color: "#6b7280", textAlign: "center", padding: "10px 0" }}>No templates yet.</div>}
-              {templates.map((tpl) => (
-                <div key={tpl.id} style={{ background: "#0f1117", border: `1px solid ${activeTemplateId === tpl.id ? "#1affd540" : "#2d3348"}`, borderRadius: 7, padding: "8px 10px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
-                        {tpl.is_builtin && <span style={{ fontSize: 8, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b30", borderRadius: 2, padding: "0 4px", fontWeight: 700 }}>BUILT-IN</span>}
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
+          {/* Templates section — fixed height, scrollable */}
+          <div style={{ flexShrink: 0, borderBottom: "1px solid #1e2538", overflowY: "auto", maxHeight: "40%", padding: "14px 14px 0" }}>
+            <SidebarSection title="Workflow Templates" badge={templates.length} defaultOpen={true}>
+              {templateMsg && (
+                <div style={{ fontSize: 11, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171", padding: "4px 8px", background: templateMsg.startsWith("✓") ? "#22c55e10" : "#ef444410", borderRadius: 5, marginBottom: 8, border: `1px solid ${templateMsg.startsWith("✓") ? "#22c55e30" : "#ef444430"}` }}>{templateMsg}</div>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
+                {templates.length === 0 && <div style={{ fontSize: 11, color: "#6b7280", textAlign: "center", padding: "8px 0" }}>No templates yet.</div>}
+                {templates.map((tpl) => (
+                  <div key={tpl.id} style={{ background: "#0f1117", border: `1px solid ${activeTemplateId === tpl.id ? "#1affd540" : "#2d3348"}`, borderRadius: 7, padding: "7px 9px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                          {tpl.is_builtin && <span style={{ fontSize: 8, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b30", borderRadius: 2, padding: "0 4px", fontWeight: 700 }}>BUILT-IN</span>}
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "#e8e8e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
+                        </div>
+                        {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 3 }}>{tpl.description}</div>}
+                        <div style={{ fontSize: 9, color: "#4b5563" }}>{tpl.agent_ids?.length ?? 0} agents</div>
                       </div>
-                      {tpl.description && <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>{tpl.description}</div>}
-                      <div style={{ fontSize: 10, color: "#4b5563" }}>{tpl.agent_ids?.length ?? 0} agents</div>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-                      <button onClick={() => loadTemplate(tpl)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #1affd540", background: "#1affd510", color: "#1affd5", cursor: "pointer" }}>Load</button>
-                      {!tpl.is_builtin && <button onClick={() => deleteTemplate(tpl.id)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>Del</button>}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
+                        <button onClick={() => loadTemplate(tpl)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #1affd540", background: "#1affd510", color: "#1affd5", cursor: "pointer" }}>Load</button>
+                        {!tpl.is_builtin && <button onClick={() => deleteTemplate(tpl.id)} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>Del</button>}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+              <div style={{ borderTop: "1px solid #1e2538", paddingTop: 8, paddingBottom: 4 }}>
+                <div style={{ fontSize: 10, color: "#6b7280", fontWeight: 600, marginBottom: 5 }}>Save Current Canvas</div>
+                <input placeholder="Template name" value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={{ marginBottom: 5 }} />
+                <input placeholder="Description (optional)" value={templateDesc} onChange={(e) => setTemplateDesc(e.target.value)} style={{ marginBottom: 7 }} />
+                <button onClick={saveTemplate} disabled={savingTemplate} className="primary-btn" style={{ width: "100%", fontSize: 11, padding: "6px" }}>{savingTemplate ? "Saving…" : "💾 Save Template"}</button>
+              </div>
+            </SidebarSection>
+          </div>
+
+          {/* Run History — takes remaining height */}
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "10px 14px 6px", borderBottom: "1px solid #1e2538", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#e8e8e8" }}>Run History</span>
+              <span style={{ fontSize: 10, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd530", borderRadius: 99, padding: "1px 7px", fontWeight: 700 }}>{runs.length}</span>
             </div>
 
-            <div style={{ borderTop: "1px solid #1e2538", paddingTop: 10 }}>
-              <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 6 }}>Save Current Canvas</div>
-              <input placeholder="Template name" value={templateName} onChange={(e) => setTemplateName(e.target.value)} style={{ marginBottom: 6 }} />
-              <input placeholder="Description (optional)" value={templateDesc} onChange={(e) => setTemplateDesc(e.target.value)} style={{ marginBottom: 8 }} />
-              <button onClick={saveTemplate} disabled={savingTemplate} className="primary-btn" style={{ width: "100%", fontSize: 12, padding: "7px" }}>{savingTemplate ? "Saving…" : "💾 Save Template"}</button>
-            </div>
-          </SidebarSection>
-        </div>
-      </div>
-
-      {/* ── Bottom panel: Runs / Live Monitor / Scheduled ── */}
-      <div style={{ height: 280, borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid #2d3348", flexShrink: 0, alignItems: "flex-end", paddingTop: 4 }}>
-          <button style={btStyle("runs")} onClick={() => setBottomTab("runs")}>Runs ({runs.length})</button>
-          <button style={btStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor {liveEvents.length > 0 && `(${liveEvents.length})`}</button>
-          <button style={btStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
-        </div>
-
-        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-          {/* RUNS TAB */}
-          {bottomTab === "runs" && (
-            <div style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0 }}>
-              {/* Run list */}
-              <div style={{ width: 320, overflowY: "auto", padding: "10px 12px", borderRight: "1px solid #1e2538", display: "flex", flexDirection: "column", gap: 6 }}>
+            {/* Run list or detail */}
+            {selectedRun ? (
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <RunDetailPanel
+                  run={selectedRun}
+                  messages={messages}
+                  agentCount={selectedRunAgentCount}
+                  onClose={() => setSelectedRunId(null)}
+                />
+              </div>
+            ) : (
+              <div style={{ flex: 1, overflowY: "auto", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 5 }}>
                 {runs.length === 0 && (
                   <div style={{ textAlign: "center", paddingTop: 24 }}>
                     <div style={{ fontSize: 24, marginBottom: 6 }}>🚀</div>
@@ -1068,43 +1057,35 @@ export default function App() {
                 )}
                 {[...runs].reverse().map((run) => <RunCard key={run.id} run={run} />)}
               </div>
-              {/* Run detail */}
-              <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-                {selectedRun
-                  ? <RunDetailPanel
-                      run={selectedRun}
-                      messages={messages}
-                      agentCount={selectedRunAgentCount}
-                      onClose={() => setSelectedRunId(null)}
-                    />
-                  : (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#4b5563" }}>
-                      <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
-                      <div style={{ fontSize: 12 }}>Select a run to view details</div>
-                    </div>
-                  )
-                }
-              </div>
-            </div>
-          )}
+            )}
+          </div>
+        </div>
+      </div>
 
-          {/* MONITOR TAB */}
+      {/* ── Bottom panel: Live Monitor + Scheduled Jobs ── */}
+      <div style={{ height: 200, borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 2, padding: "0 16px", borderBottom: "1px solid #2d3348", flexShrink: 0, alignItems: "flex-end", paddingTop: 4 }}>
+          <button style={btStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor {liveEvents.length > 0 && `(${liveEvents.length})`}</button>
+          <button style={btStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0 }}>
           {bottomTab === "monitor" && (
-            <div style={{ flex: 1, overflowY: "auto", padding: "10px 16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 600 }}>Live WebSocket events (last 50)</span>
+            <div style={{ height: "100%", overflowY: "auto", padding: "8px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>Live WebSocket events (last 50)</span>
                 <button onClick={() => setLiveEvents([])} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>Clear</button>
               </div>
               {liveEvents.length === 0 && (
-                <div style={{ textAlign: "center", paddingTop: 24 }}>
-                  <div style={{ fontSize: 22, marginBottom: 6 }}>📡</div>
+                <div style={{ textAlign: "center", paddingTop: 16 }}>
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>📡</div>
                   <div style={{ fontSize: 12, color: "#6b7280" }}>Waiting for events…</div>
                 </div>
               )}
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                 {liveEvents.map((ev, i) => (
-                  <div key={i} style={{ background: "#0f1117", borderRadius: 6, border: "1px solid #1e2538", padding: "5px 10px", display: "flex", gap: 10, alignItems: "flex-start" }}>
-                    <span style={{ fontSize: 10, color: "#4b5563", flexShrink: 0, marginTop: 1 }}>{new Date(ev.timestamp || Date.now()).toLocaleTimeString()}</span>
+                  <div key={i} style={{ background: "#0f1117", borderRadius: 5, border: "1px solid #1e2538", padding: "4px 10px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <span style={{ fontSize: 10, color: "#4b5563", flexShrink: 0 }}>{new Date(ev.timestamp || Date.now()).toLocaleTimeString()}</span>
                     <span style={{ fontSize: 10, fontWeight: 700, color: ev.type === "error" ? "#ef4444" : ev.type === "output" ? "#22c55e" : "#1affd5", flexShrink: 0 }}>{ev.type}</span>
                     {ev.agent && <span style={{ fontSize: 10, color: "#f59e0b", flexShrink: 0 }}>{ev.agent}</span>}
                     <span style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{typeof ev.content === "string" ? ev.content : JSON.stringify(ev.content)}</span>
@@ -1114,9 +1095,8 @@ export default function App() {
             </div>
           )}
 
-          {/* SCHEDULED JOBS TAB */}
           {bottomTab === "scheduled" && (
-            <div style={{ flex: 1, overflowY: "auto", padding: "10px 16px" }}>
+            <div style={{ height: "100%", overflowY: "auto", padding: "8px 16px" }}>
               <ScheduledJobsPanel />
             </div>
           )}
