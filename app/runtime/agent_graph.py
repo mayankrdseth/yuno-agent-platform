@@ -66,6 +66,11 @@ _COST_PER_1K = {
 }
 _DEFAULT_COST = (0.00020, 0.00020)
 
+# Matches a JSON object containing a "tool" key anywhere in the reply.
+# This is intentionally non-greedy and single-level (no nested {}) so it
+# won't accidentally match the routing JSON or other objects.
+_TOOL_CALL_RE = re.compile(r'\{[^{}]*"tool"\s*:[^{}]*\}', re.DOTALL)
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -139,6 +144,31 @@ def _build_system_prompt_with_rules(system_prompt: str, interaction_rules: list[
     return system_prompt + rules_block
 
 
+def _extract_tool_call(reply: str, tools: dict) -> tuple[str, str] | None:
+    """
+    Search for a JSON tool-call object anywhere in `reply`.
+
+    LLMs often prepend prose before the JSON, e.g.:
+        "To calculate this I'll use the calculator tool. {"tool": "calculator", "input": "22*36"}"
+
+    Using re.search (instead of startswith) handles this case correctly.
+    Returns (tool_name, tool_input) if a valid, known tool call is found,
+    otherwise None.
+    """
+    match = _TOOL_CALL_RE.search(reply)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group())
+        tool_name = parsed.get("tool", "")
+        tool_input = parsed.get("input", "")
+        if tool_name and tool_name in tools:
+            return tool_name, tool_input
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return None
+
+
 # ── Core specialist runner ────────────────────────────────────────────────────
 
 async def run_agent_with_tools(
@@ -168,7 +198,7 @@ async def run_agent_with_tools(
             "\n\nYou have access to these tools. "
             "To use a tool, respond ONLY with a JSON object like:\n"
             '{"tool": "<tool_name>", "input": "<input_string>"}\n'
-            "Otherwise respond normally with your answer.\n"
+            "Do NOT include any prose before or after the JSON — output the JSON object only.\n"
             f"Available tools:\n{format_tools_for_prompt(tool_names)}"
         )
 
@@ -191,25 +221,22 @@ async def run_agent_with_tools(
     usage_acc = _accumulate_usage(usage_acc, _extract_usage(response))
     reply = response.content.strip()
 
-    if tools and reply.startswith("{"):
-        try:
-            parsed = json.loads(reply)
-            tool_name  = parsed.get("tool", "")
-            tool_input = parsed.get("input", "")
-            if tool_name in tools:
-                logger.info("[%s] calling tool: %s(%s)", agent_name, tool_name, tool_input)
-                tool_result = await tools[tool_name](tool_input)
-                tool_calls_log.append({"tool": tool_name, "input": tool_input, "result": tool_result})
-                followup = [
-                    SystemMessage(content=effective_system_prompt),
-                    HumanMessage(content=user_message),
-                    SystemMessage(content=f"Tool result from {tool_name}:\n{tool_result}\nNow provide your final answer."),
-                ]
-                final_response = await llm.ainvoke(followup)
-                usage_acc = _accumulate_usage(usage_acc, _extract_usage(final_response))
-                reply = final_response.content.strip()
-        except (json.JSONDecodeError, KeyError):
-            pass
+    # Use re.search-based extraction — handles prose before the JSON object
+    if tools:
+        tool_call = _extract_tool_call(reply, tools)
+        if tool_call:
+            tool_name, tool_input = tool_call
+            logger.info("[%s] calling tool: %s(%s)", agent_name, tool_name, tool_input)
+            tool_result = await tools[tool_name](tool_input)
+            tool_calls_log.append({"tool": tool_name, "input": tool_input, "result": tool_result})
+            followup = [
+                SystemMessage(content=effective_system_prompt),
+                HumanMessage(content=user_message),
+                SystemMessage(content=f"Tool result from {tool_name}:\n{tool_result}\nNow provide your final answer."),
+            ]
+            final_response = await llm.ainvoke(followup)
+            usage_acc = _accumulate_usage(usage_acc, _extract_usage(final_response))
+            reply = final_response.content.strip()
 
     reply = _apply_guardrails(
         reply,
@@ -274,6 +301,7 @@ async def llm_route_and_detect(
             "\n\nYou have access to tools for precise calculation. "
             "To use a tool, respond with ONLY a JSON object like:\n"
             '{"tool": "<tool_name>", "input": "<input>"}\n'
+            "Do NOT include any prose before or after the JSON — output the JSON object only.\n"
             "Use the `datetime` tool to get current UTC time. "
             "Use the `calculator` tool for offset arithmetic.\n"
             f"Available tools:\n{format_tools_for_prompt(orchestrator_tools)}\n"
@@ -321,25 +349,21 @@ async def llm_route_and_detect(
     usage_acc = _accumulate_usage(usage_acc, _extract_usage(response))
     reply = response.content.strip()
 
-    # Handle tool call from orchestrator (e.g. datetime or calculator for cron)
-    if tools and reply.startswith("{"):
-        try:
-            parsed = json.loads(reply)
-            tool_name  = parsed.get("tool", "")
-            tool_input = parsed.get("input", "")
-            if tool_name and tool_name in tools:
-                logger.info("[orchestrator] tool call: %s(%s)", tool_name, tool_input)
-                tool_result = await tools[tool_name](tool_input)
-                followup_prompt = (
-                    routing_prompt
-                    + f"\n\nTool result from {tool_name}: {tool_result}\n"
-                    "Now provide your final routing JSON."
-                )
-                followup_response = await llm.ainvoke([HumanMessage(content=followup_prompt)])
-                usage_acc = _accumulate_usage(usage_acc, _extract_usage(followup_response))
-                reply = followup_response.content.strip()
-        except (json.JSONDecodeError, KeyError):
-            pass
+    # Handle tool call from orchestrator — use re.search to find JSON anywhere in reply
+    if tools:
+        tool_call = _extract_tool_call(reply, tools)
+        if tool_call:
+            tool_name, tool_input = tool_call
+            logger.info("[orchestrator] tool call: %s(%s)", tool_name, tool_input)
+            tool_result = await tools[tool_name](tool_input)
+            followup_prompt = (
+                routing_prompt
+                + f"\n\nTool result from {tool_name}: {tool_result}\n"
+                "Now provide your final routing JSON."
+            )
+            followup_response = await llm.ainvoke([HumanMessage(content=followup_prompt)])
+            usage_acc = _accumulate_usage(usage_acc, _extract_usage(followup_response))
+            reply = followup_response.content.strip()
 
     # Parse routing JSON
     json_match = re.search(r'\{.*\}', reply, re.DOTALL)
