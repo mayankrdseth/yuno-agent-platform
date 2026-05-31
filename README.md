@@ -87,6 +87,50 @@ docker compose up --build
 
 ---
 
+## Demo: Try These Queries
+
+Once the stack is running, open the UI, load the **Research Hub** template, and paste any of these into the input box.
+
+### Research Hub — SINGLE routing
+```
+What is LangGraph and how does it differ from LangChain?
+```
+Routes directly to **Researcher** (factual lookup, no summary needed).
+
+### Research Hub — PIPELINE routing (inter-agent message passing)
+```
+Research the latest advances in multi-agent AI systems and give me a concise brief.
+```
+1. **Orchestrator** detects `research + brief` intent → sets `pipeline_mode=True`
+2. **Researcher** runs web_search + wikipedia, stores findings in `research_notes`
+3. **Summariser** receives Researcher's output as input → produces TL;DR brief
+
+### Research Hub — FANOUT routing (parallel)
+```
+Tell me about the history of neural networks and also summarise recent transformer papers.
+```
+Both **Researcher** and **Summariser** receive `user_input` independently and run in parallel.
+
+### Research Hub — SCHEDULE routing
+```
+Research AI news every day at 9 AM IST
+```
+Orchestrator uses `calculator` (UTC offset arithmetic: IST = UTC+5:30) and `datetime` (current UTC) to register a cron job: `0 3 * * *`.
+
+### Support Triage — routine query
+```
+How do I reset my password?
+```
+Routes to **Supporter** (routine, informational).
+
+### Support Triage — escalation
+```
+My account has been charged twice and I still can't access the service. This is urgent.
+```
+Routes to **Escalator**, which uses `datetime` to timestamp the escalation report.
+
+---
+
 ## Telegram Webhook Setup (Local Development)
 
 Telegram webhooks require a publicly reachable HTTPS URL. The easiest way to get one locally is **ngrok**.
@@ -216,8 +260,8 @@ User input (UI or Telegram)
         │
         ▼
   orchestrator_node  ←─────────────────────────────────────┐
-  (LLM router — detects mode, uses calculator/datetime      │
-   tools for UTC cron arithmetic)                           │
+  (LLM router — uses ⚡ calculator + ⚡ datetime tools       │
+   for UTC cron arithmetic on SCHEDULE intents)             │
         │                                                   │
         ├── SCHEDULE ──▶ schedule_end_node ──▶ END          │
         │                                                   │
@@ -228,12 +272,13 @@ User input (UI or Telegram)
         └── PIPELINE ──▶ Researcher                         │
                                │                           │
                         pipeline_handoff_node              │
-                        (injects research_notes)           │
+                        (injects research_notes as         │
+                         next agent's input)               │
                                │                           │
                           Summariser                       │
                                │                           │
-                        retry_check_node                   │
-                        (empty/guardrail?) ── needs_retry ─┘
+                        retry_check_node ── needs_retry ───┘
+                        (empty / guardrail-blocked?)
                                │
                                └── response + token usage persisted to DB
 ```
@@ -261,7 +306,11 @@ This is the key difference from FANOUT: in FANOUT both agents get `user_input` i
 | `Supporter` | agent | — | customer_support, empathy, communication |
 | `Escalator` | agent | 🔧 `datetime` | escalation, incident_reporting, urgency_classification |
 
-> ⚡ **Orchestrator tools** (`calculator` and `datetime`) are **always active** on both orchestrators and are pinned in the UI — they cannot be removed. These tools are required for UTC timezone arithmetic when scheduling cron jobs.
+> ⚡ **Orchestrator tools** (`calculator` and `datetime`) are **always active** on both orchestrators and are pinned in the UI with a lock icon — they cannot be unchecked via the edit modal. These tools are required for UTC timezone arithmetic when scheduling cron jobs.
+>
+> This is enforced at two layers:
+> - **Frontend** — the checkboxes for `calculator` and `datetime` are disabled with `🔒` when `role === "orchestrator"`, and the save handler always force-includes them: `tools = [...new Set(["calculator", "datetime", ...tools])]`
+> - **Backend seed** — `init_db.py` seeds both `ResearchOrchestrator` and `SupportOrchestrator` with `"tools": ["calculator", "datetime"]` and upserts on every restart, so the tools are restored even if manually cleared from the DB.
 
 ### Built-in Templates
 
@@ -275,7 +324,7 @@ This is the key difference from FANOUT: in FANOUT both agents get `user_input` i
 | Tool | What it does | Used by |
 |---|---|---|
 | `datetime` | Returns current UTC date and time | ⚡ Both orchestrators (cron arithmetic), Escalator (timestamps) |
-| `calculator` | Safe `eval` of math expressions using Python `math` module | ⚡ Both orchestrators (UTC offset arithmetic) |
+| `calculator` | Safe `eval` of math expressions using Python `math` module | ⚡ Both orchestrators (UTC offset arithmetic for scheduling) |
 | `web_search` | DuckDuckGo Instant Answer API (no key required) | Researcher, Summariser |
 | `wikipedia` | Wikipedia REST API summary (~400 chars) | Researcher, Summariser |
 
@@ -283,7 +332,7 @@ This is the key difference from FANOUT: in FANOUT both agents get `user_input` i
 
 Every agent node on the ReactFlow canvas displays its tools inline:
 
-- **⚡ Teal badge** — orchestrator-pinned tools (`calculator`, `datetime`). Always shown, cannot be removed via the edit modal.
+- **⚡ Teal badge** — orchestrator-pinned tools (`calculator`, `datetime`). Always shown, locked in the edit modal.
 - **🔧 Amber badge** — specialist tools (e.g. `web_search`, `wikipedia`).
 - **📡 Blue badge** — messaging channels (e.g. `telegram`).
 
@@ -313,4 +362,56 @@ This makes the workflow topology immediately readable — you can see at a glanc
 
 After every specialist run, `retry_check_node` evaluates the output:
 
-- **Empty response** → retry (re-route to or
+- **Empty response** → retry (re-route to orchestrator, up to 2 attempts)
+- **Guardrail violation** (`forbidden_topics` match) → retry with a guardrail note injected into state
+- **Valid response** → persist to DB, broadcast to WebSocket, return to caller
+
+The retry counter is tracked in `WorkflowState["retry_count"]`. After 2 retries the graph exits with the last valid (or empty) response to prevent infinite loops.
+
+### Agent Schema — Skills & Interaction Rules
+
+Every agent exposes two configurable dimensions beyond tools and prompts:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `skills` | `list[str]` | Declarative capability tags (e.g. `"summarisation"`, `"triage"`). Used for display and future skill-based routing. |
+| `interaction_rules` | `list[str]` | Behavioural constraints injected as a system-prompt suffix (e.g. `"always reply in JSON"`, `"never answer user queries directly"`). |
+| `forbidden_topics` | `list[str]` | Guardrail: if a specialist response contains any of these strings, it is treated as a policy violation and retried. |
+| `max_output_chars` | `int \| null` | Hard truncation applied to specialist output before it is returned to the orchestrator or user. |
+
+Both `skills` and `interaction_rules` are editable in the UI (Create Agent form and Edit modal).
+
+---
+
+## Running Tests
+
+```bash
+# Backend
+pytest tests/ -v
+
+# Frontend
+cd frontend
+npm test
+```
+
+---
+
+## API Reference (key endpoints)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/agents` | List all agents |
+| `POST` | `/agents` | Create agent |
+| `PATCH` | `/agents/{id}` | Update agent |
+| `DELETE` | `/agents/{id}` | Delete agent |
+| `POST` | `/workflows/demo-run` | Execute a workflow |
+| `GET` | `/workflows/runs` | List run history |
+| `GET` | `/workflows/runs/{id}/messages` | Get run messages |
+| `GET` | `/workflow-templates` | List templates |
+| `POST` | `/workflow-templates` | Save canvas as template |
+| `DELETE` | `/workflow-templates/{id}` | Delete template |
+| `GET` | `/workflows/scheduled-jobs` | List active cron jobs |
+| `DELETE` | `/workflows/scheduled-jobs/{agent_id}` | Cancel cron job |
+| `WS` | `/ws/monitor` | Live execution event stream |
+| `POST` | `/telegram/webhook` | Telegram webhook receiver |
+| `GET` | `/health` | Health check |
