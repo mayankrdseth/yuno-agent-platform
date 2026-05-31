@@ -1,9 +1,12 @@
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
 from app.models.workflow_run import WorkflowRun
 from app.runtime.agent_graph import _estimate_cost
+from app.runtime.state import TokenUsage
 from app.schemas.workflow import (
     WorkflowMessageRead,
     WorkflowRunRequest,
@@ -20,6 +23,15 @@ from app.services.run_service import (
 from app.services.workflow_service import run_demo_workflow
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+
+def _usage_to_dict(obj) -> dict:
+    """Normalise TokenUsage dataclass, dict, or None → plain dict."""
+    if obj is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if isinstance(obj, TokenUsage):
+        return asdict(obj)
+    return obj  # already a dict
 
 
 @router.post("/demo-run", response_model=WorkflowRunResponse)
@@ -46,11 +58,12 @@ async def execute_demo_workflow(
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    usage = result.get("token_usage") or {}
-    total_tokens = usage.get("total_tokens") or None
-    prompt_tokens = usage.get("prompt_tokens") or None
-    completion_tokens = usage.get("completion_tokens") or None
-    estimated_cost = _estimate_cost("", usage) if total_tokens else None
+    # Always normalise to dict — graph returns TokenUsage dataclass
+    usage = _usage_to_dict(result.get("token_usage"))
+    total_tokens       = usage.get("total_tokens") or None
+    prompt_tokens      = usage.get("prompt_tokens") or None
+    completion_tokens  = usage.get("completion_tokens") or None
+    estimated_cost     = _estimate_cost("", usage) if total_tokens else None
 
     await complete_run(
         db, run, result["final_response"],
