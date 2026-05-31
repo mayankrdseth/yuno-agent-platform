@@ -334,7 +334,7 @@ function RunDetailPanel({ run, messages, agentCount, onClose }) {
   const [tab, setTab] = useState("timeline");
 
   const timeline = useMemo(() => {
-    return [...messages].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    return [...messages].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   }, [messages]);
 
   const agentMessages = useMemo(() => timeline.filter((m) => ["input", "output", "agent_message"].includes(m.message_type)), [timeline]);
@@ -842,11 +842,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Main 3-column layout ── */}
+      {/* ── Body: full-height left sidebar + right stack ── */}
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
 
         {/* ── LEFT: Agent Library ── */}
-        <div style={{ width: 260, borderRight: "1px solid #1e2538", overflowY: "auto", padding: "14px 16px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 0 }}>
+        <div style={{ width: 260, height: "100%", borderRight: "1px solid #1e2538", overflowY: "auto", padding: "14px 16px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 0 }}>
 
           <SidebarSection title="Create Agent">
             <form onSubmit={createAgent} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -940,63 +940,9 @@ export default function App() {
               })}
             </div>
           </SidebarSection>
-        </div>
 
-        {/* ── CENTER: Canvas ── */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-
-          {/* Canvas toolbar */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderBottom: "1px solid #1e2538", flexShrink: 0, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>WORKFLOW CANVAS</span>
-            <span style={{ fontSize: 10, color: "#4b5563" }}>{nodes.length} agent{nodes.length !== 1 ? "s" : ""} · {edges.length} edge{edges.length !== 1 ? "s" : ""}</span>
-            <button onClick={() => { setNodes([]); setEdges([]); setActiveTemplateId(null); }} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer", marginLeft: "auto" }}>Clear</button>
-          </div>
-
-          {/* ReactFlow canvas — takes all remaining height */}
-          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-            <ReactFlow
-              nodes={nodes} edges={edges}
-              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-              onConnect={onConnect} nodeTypes={nodeTypes}
-              fitView fitViewOptions={{ padding: 0.2 }}
-              style={{ background: "#0d1018" }}
-            >
-              <Background color="#1e2538" gap={20} size={1} />
-              <Controls style={{ background: "#1a1f2e", border: "1px solid #2d3348" }} />
-              <MiniMap nodeColor={(n) => n.data?.role === "orchestrator" ? "#f59e0b" : "#1affd5"} style={{ background: "#0d1018", border: "1px solid #1e2538" }} />
-            </ReactFlow>
-            {nodes.length === 0 && (
-              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-                <div style={{ fontSize: 36, marginBottom: 10, opacity: 0.3 }}>🕸</div>
-                <div style={{ fontSize: 13, color: "#4b5563" }}>Add agents from the library or load a template</div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── RIGHT: Run Workflow + Workflow Templates ── */}
-        <div style={{ width: 300, borderLeft: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0, minHeight: 0, overflowY: "auto" }}>
-
-          {/* ── Run Workflow controls (moved here from center) ── */}
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid #1e2538", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>Run Workflow</div>
-            <textarea
-              rows={2}
-              value={workflowInput}
-              onChange={(e) => setWorkflowInput(e.target.value)}
-              placeholder="Workflow input / user message…"
-              style={{ resize: "vertical", background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" }}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button onClick={runWorkflow} disabled={loading} className="primary-btn" style={{ padding: "7px 16px", fontSize: 12 }}>
-                {loading ? "⏳ Running…" : "▶ Run Workflow"}
-              </button>
-              {runError && <span style={{ fontSize: 11, color: "#f87171" }}>⚠ {runError}</span>}
-            </div>
-          </div>
-
-          {/* Templates section */}
-          <div style={{ flexShrink: 0, borderBottom: "1px solid #1e2538", padding: "14px 14px 0" }}>
+          {/* ── Workflow Templates (moved from right panel) ── */}
+          <div style={{ borderBottom: "1px solid #1e2538", padding: "14px 0 0" }}>
             <SidebarSection title="Workflow Templates" badge={templates.length} defaultOpen={true}>
               {templateMsg && (
                 <div style={{ fontSize: 11, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f87171", padding: "4px 8px", background: templateMsg.startsWith("✓") ? "#22c55e10" : "#ef444410", borderRadius: 5, marginBottom: 8, border: `1px solid ${templateMsg.startsWith("✓") ? "#22c55e30" : "#ef444430"}` }}>{templateMsg}</div>
@@ -1031,11 +977,71 @@ export default function App() {
             </SidebarSection>
           </div>
         </div>
-      </div>
 
-      {/* ── Bottom panel: Live Monitor + Scheduled Jobs + Run History ── */}
-      <div style={{ height: 200, borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ display: "flex", gap: 2, paddingLeft: 260, paddingRight: 16, borderBottom: "1px solid #2d3348", flexShrink: 0, alignItems: "flex-end", paddingTop: 4 }}>
+        {/* ── RIGHT STACK: (canvas + run panel) on top, bottom panel below ── */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+
+          {/* ── Upper row: Canvas + Run Workflow panel ── */}
+          <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+
+        {/* ── CENTER: Canvas ── */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+
+          {/* Canvas toolbar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderBottom: "1px solid #1e2538", flexShrink: 0, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>WORKFLOW CANVAS</span>
+            <span style={{ fontSize: 10, color: "#4b5563" }}>{nodes.length} agent{nodes.length !== 1 ? "s" : ""} · {edges.length} edge{edges.length !== 1 ? "s" : ""}</span>
+            <button onClick={() => { setNodes([]); setEdges([]); setActiveTemplateId(null); }} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer", marginLeft: "auto" }}>Clear</button>
+          </div>
+
+          {/* ReactFlow canvas — takes all remaining height */}
+          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+            <ReactFlow
+              nodes={nodes} edges={edges}
+              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+              onConnect={onConnect} nodeTypes={nodeTypes}
+              fitView fitViewOptions={{ padding: 0.2 }}
+              style={{ background: "#0d1018" }}
+            >
+              <Background color="#1e2538" gap={20} size={1} />
+              <Controls style={{ background: "#1a1f2e", border: "1px solid #2d3348" }} />
+              <MiniMap nodeColor={(n) => n.data?.role === "orchestrator" ? "#f59e0b" : "#1affd5"} style={{ background: "#0d1018", border: "1px solid #1e2538" }} />
+            </ReactFlow>
+            {nodes.length === 0 && (
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                <div style={{ fontSize: 36, marginBottom: 10, opacity: 0.3 }}>🕸</div>
+                <div style={{ fontSize: 13, color: "#4b5563" }}>Add agents from the library or load a template</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT: Run Workflow + Query ── */}
+        <div style={{ width: 260, borderLeft: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0, overflowY: "auto" }}>
+
+          {/* ── Run Workflow controls (moved here from center) ── */}
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid #1e2538", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>Run Workflow</div>
+            <textarea
+              rows={6}
+              value={workflowInput}
+              onChange={(e) => setWorkflowInput(e.target.value)}
+              placeholder="Workflow input / user message…"
+              style={{ resize: "vertical", minHeight: 120, background: "#0f1117", color: "#e8e8e8", border: "1px solid #2d3348", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button onClick={runWorkflow} disabled={loading} className="primary-btn" style={{ padding: "7px 16px", fontSize: 12 }}>
+                {loading ? "⏳ Running…" : "▶ Run Workflow"}
+              </button>
+              {runError && <span style={{ fontSize: 11, color: "#f87171" }}>⚠ {runError}</span>}
+            </div>
+          </div>
+        </div>
+          </div>
+
+          {/* ── Bottom panel: Live Monitor + Scheduled Jobs + Run History ── */}
+          <div style={{ height: 280, borderTop: "1px solid #1e2538", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 2, paddingRight: 16, borderBottom: "1px solid #2d3348", flexShrink: 0, alignItems: "flex-end", paddingTop: 4 }}>
           <button style={btStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor {liveEvents.length > 0 && `(${liveEvents.length})`}</button>
           <button style={btStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
           <button style={btStyle("runs")} onClick={() => setBottomTab("runs")}>Run History <span style={{ fontSize: 10, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd530", borderRadius: 99, padding: "1px 5px", fontWeight: 700, marginLeft: 4 }}>{runs.length}</span></button>
@@ -1092,11 +1098,13 @@ export default function App() {
                       <div style={{ fontSize: 12, color: "#6b7280" }}>No runs yet. Run a workflow!</div>
                     </div>
                   )}
-                  {[...runs].reverse().map((run) => <RunCard key={run.id} run={run} />)}
+                  {[...runs].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map((run) => <RunCard key={run.id} run={run} />)}
                 </div>
               )}
             </div>
           )}
+        </div>
+      </div>
         </div>
       </div>
 
