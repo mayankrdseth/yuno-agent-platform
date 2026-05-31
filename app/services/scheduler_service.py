@@ -9,11 +9,10 @@ Jobs are registered at startup and hot-reloaded when an agent is PATCH-ed.
 
 Timezone
 --------
-All cron expressions are interpreted in the timezone configured via the
-SCHEDULER_TIMEZONE environment variable (default: UTC).
-Set SCHEDULER_TIMEZONE=Asia/Kolkata in .env for IST deployments.
-The LLM routing prompt is also made aware of this timezone so it emits
-cron expressions in the correct local time rather than always UTC.
+All cron expressions are stored and executed in UTC.
+The LLM routing prompt instructs the model to convert any user-mentioned
+timezone (IST, EST, PST, etc.) to UTC before emitting the cron expression,
+so no server-side timezone configuration is required.
 """
 from __future__ import annotations
 
@@ -23,7 +22,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -34,9 +32,7 @@ _scheduler: AsyncIOScheduler | None = None
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
-        tz = get_settings().scheduler_timezone
-        _scheduler = AsyncIOScheduler(timezone=tz)
-        logger.info("APScheduler initialised with timezone='%s'", tz)
+        _scheduler = AsyncIOScheduler(timezone="UTC")
     return _scheduler
 
 
@@ -69,14 +65,13 @@ async def _run_scheduled_agent(agent_id: int, prompt: str) -> None:
 
 
 def register_agent_job(agent_id: int, cron: str, prompt: str) -> None:
-    """Add or replace a cron job for an agent."""
+    """Add or replace a cron job for an agent (cron must be in UTC)."""
     scheduler = get_scheduler()
-    tz = get_settings().scheduler_timezone
     job_id = _job_id(agent_id)
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
     try:
-        trigger = CronTrigger.from_crontab(cron, timezone=tz)
+        trigger = CronTrigger.from_crontab(cron, timezone="UTC")
         scheduler.add_job(
             _run_scheduled_agent,
             trigger=trigger,
@@ -85,15 +80,9 @@ def register_agent_job(agent_id: int, cron: str, prompt: str) -> None:
             replace_existing=True,
             misfire_grace_time=300,
         )
-        logger.info(
-            "Scheduled job registered: agent_id=%s cron='%s' timezone='%s'",
-            agent_id, cron, tz,
-        )
+        logger.info("Scheduled job registered: agent_id=%s cron='%s' (UTC)", agent_id, cron)
     except Exception as exc:
-        logger.error(
-            "Failed to register schedule for agent_id=%s cron='%s': %s",
-            agent_id, cron, exc,
-        )
+        logger.error("Failed to register schedule for agent_id=%s cron='%s': %s", agent_id, cron, exc)
 
 
 def remove_agent_job(agent_id: int) -> None:
@@ -124,8 +113,7 @@ async def reload_all_jobs() -> None:
         if agent.schedule and agent.schedule_prompt:
             register_agent_job(agent.id, agent.schedule, agent.schedule_prompt)
 
-    tz = get_settings().scheduler_timezone
-    logger.info("Scheduler: %d job(s) loaded from DB (timezone='%s').", len(agents), tz)
+    logger.info("Scheduler: %d job(s) loaded from DB.", len(agents))
 
 
 def start_scheduler() -> None:

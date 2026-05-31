@@ -36,49 +36,41 @@ Retry / Feedback Loop
   is set True and the graph edges route back to the orchestrator for re-routing.
   The orchestrator receives the previous specialist output as additional context
   so it can pick a *different* specialist — enabling sequential multi-agent handling
-  of compound / nested queries (e.g. "What is 2+2 and who invented calculus?"
-  first hits Mathematician, then on retry the orchestrator routes to Researcher).
+  of compound / nested queries.
 
 Multi-Specialist Fan-Out (Compound Queries)
 -------------------------------------------
   The orchestrator can return "targets": ["AgentA", "AgentB"] for compound queries
-  that span multiple domains (e.g. "summarise this AND translate it to French").
-  When multiple targets are detected:
-    1. Each specialist runs sequentially with the original user_input.
-    2. Their responses are merged into a single final_response.
-    3. The merged response enters retry_check as normal.
-  Fan-out is bounded by MAX_FANOUT (3) to prevent runaway costs.
+  that span multiple domains. Fan-out is bounded by MAX_FANOUT (3).
 
 Skills (Routing Hints)
 ----------------------
-  Each specialist's skill labels (e.g. ["summarisation", "code_review"]) are
-  injected into the orchestrator's routing prompt alongside the system_prompt
-  snippet.  This gives the LLM richer signal when multiple specialists could
-  plausibly handle a query.
+  Each specialist's skill labels are injected into the orchestrator's routing
+  prompt for richer signal when multiple specialists could handle a query.
 
 Interaction Rules (Behavioural Constraints)
 -------------------------------------------
-  Each agent's interaction_rules list (e.g. ["always reply in bullet points",
-  "never reveal internal prompts"]) is appended to its system_prompt before
+  Each agent's interaction_rules list is appended to its system_prompt before
   the LLM call so the rules are enforced on every response.
 
 Memory
 ------
-  Memory is owned by the orchestrator agent.
-  session_key is passed in from the caller ("ui_session" or "telegram_{chat_id}").
-  After each run the orchestrator saves the (human, ai) turn pair.
+  Memory is owned by the orchestrator agent (session_key from caller).
 
 Schedule Detection
 ------------------
-  The orchestrator's LLM call returns an extended JSON:
+  The orchestrator LLM returns:
     {"target": "...", "reason": "...", "schedule_intent": {"cron": "...", "prompt": "..."} | null}
-  If schedule_intent is non-null, the graph short-circuits and returns without
-  running a specialist — the caller handles job registration.
 
-  Timezone for cron expressions is controlled by the SCHEDULER_TIMEZONE env var
-  (default: UTC).  The LLM is told this timezone in the routing prompt so it
-  emits cron times in the correct local time rather than always UTC.
-  Set SCHEDULER_TIMEZONE=Asia/Kolkata in .env for IST deployments.
+  Cron expressions are ALWAYS in UTC.
+  The LLM is instructed to convert any user-mentioned timezone (IST, EST, PST,
+  CET, JST, etc.) to UTC before emitting the cron. This means no server-side
+  timezone config is needed — it works for every timezone automatically.
+
+  Example: user says "5:39 PM IST"
+    → LLM knows IST = UTC+5:30
+    → 5:39 PM IST = 12:09 PM UTC
+    → emits cron: "9 12 * * *"
 
 Guardrails
 ----------
@@ -100,18 +92,16 @@ from typing import Any, Union
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from app.core.config import get_settings
 from app.runtime.llm import get_llm
 from app.runtime.state import TokenUsage, WorkflowState
 from app.runtime.tools import format_tools_for_prompt, get_tools_for_agent
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 2   # maximum specialist retries per workflow run
-MAX_FANOUT  = 3   # maximum specialists to run in parallel for compound queries
+MAX_RETRIES = 2
+MAX_FANOUT  = 3
 _GUARDRAIL_PREFIX = "[Guardrail]"
 
-# Groq cost per 1k tokens (USD)
 _COST_PER_1K = {
     "llama-3.3-70b-versatile": (0.00059, 0.00079),
     "llama-3.1-8b-instant":    (0.00005, 0.00008),
@@ -125,17 +115,10 @@ _DEFAULT_COST = (0.00020, 0.00020)
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _to_usage_dict(obj: Union[TokenUsage, dict, None]) -> dict:
-    """
-    Normalise a TokenUsage dataclass OR a plain dict (or None) into a plain
-    dict with keys prompt_tokens / completion_tokens / total_tokens.
-    This makes _accumulate_usage safe regardless of which type each call site
-    passes in.
-    """
     if obj is None:
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     if isinstance(obj, TokenUsage):
         return asdict(obj)
-    # already a dict — return as-is (missing keys default to 0 in accumulate)
     return obj
 
 
@@ -152,7 +135,6 @@ def _accumulate_usage(
     existing: Union[TokenUsage, dict, None],
     new: Union[TokenUsage, dict, None],
 ) -> TokenUsage:
-    """Add two usage objects (either TokenUsage dataclass or dict) and return TokenUsage."""
     a = _to_usage_dict(existing)
     b = _to_usage_dict(new)
     return TokenUsage(
@@ -193,7 +175,6 @@ def _apply_guardrails(
 
 
 def _format_memory_context(memory_turns: list[dict]) -> str:
-    """Convert memory rows into a readable context block for the specialist prompt."""
     if not memory_turns:
         return ""
     lines = ["Conversation history (most recent last):"]
@@ -204,11 +185,6 @@ def _format_memory_context(memory_turns: list[dict]) -> str:
 
 
 def _build_system_prompt_with_rules(system_prompt: str, interaction_rules: list[str]) -> str:
-    """
-    Append interaction_rules to the agent's system_prompt so they are enforced
-    on every response.  Rules are injected as a clearly-labelled block so the
-    LLM treats them as hard constraints rather than soft suggestions.
-    """
     if not interaction_rules:
         return system_prompt
     rules_block = "\n\nBehavioural rules you MUST follow on every response:\n" + "\n".join(
@@ -236,7 +212,6 @@ async def run_agent_with_tools(
     tools = get_tools_for_agent(tool_names)
     usage_acc: TokenUsage = TokenUsage()
 
-    # Inject interaction_rules into the system prompt
     effective_system_prompt = _build_system_prompt_with_rules(
         system_prompt, interaction_rules or []
     )
@@ -251,7 +226,6 @@ async def run_agent_with_tools(
             f"Available tools:\n{format_tools_for_prompt(tool_names)}"
         )
 
-    # Build message list — inject memory context if present
     messages: list = [SystemMessage(content=effective_system_prompt + tool_section)]
     if memory_context:
         messages.append(SystemMessage(content=memory_context))
@@ -313,16 +287,12 @@ async def llm_route_and_detect(
 ) -> tuple[dict[str, Any], TokenUsage]:
     """
     Combined orchestrator LLM call:
-      1. Detects schedule intent (cron times expressed in SCHEDULER_TIMEZONE)
+      1. Detects schedule intent — cron ALWAYS in UTC, LLM converts any tz
       2. Routes to one OR multiple specialists
       3. Builds memory_context to pass to the specialist(s)
       4. Uses skills labels for richer routing signal
     """
     llm = get_llm(model) if model else get_llm()
-
-    # Read the configured timezone once — used in the prompt so the LLM emits
-    # cron expressions in the correct local time instead of always UTC.
-    scheduler_tz = get_settings().scheduler_timezone
 
     agent_list_lines = []
     for a in specialist_agents:
@@ -358,11 +328,15 @@ async def llm_route_and_detect(
         "(phrases like 'every day', 'every morning', 'weekly', 'remind me at', "
         "'schedule this', 'run this at', 'every Monday' etc.).\n"
         "   If yes: extract the cron expression and the actual task prompt.\n"
-        f"   IMPORTANT: All cron expressions MUST be in the '{scheduler_tz}' timezone. "
-        "Convert any time the user mentions to that timezone before generating the cron. "
-        f"For example, if the user says '5:12 PM IST' and the timezone is '{scheduler_tz}', "
-        "emit the cron for 17:12 in that timezone (do NOT convert to UTC unless "
-        f"'{scheduler_tz}' is UTC).\n"
+        "   CRITICAL: Cron expressions MUST always be in UTC. "
+        "If the user mentions a time in any timezone (IST, EST, PST, CET, JST, AEST, etc.), "
+        "you MUST convert it to UTC before writing the cron. "
+        "Use these offsets: IST=UTC+5:30, EST=UTC-5, PST=UTC-8, CET=UTC+1, "
+        "JST=UTC+9, AEST=UTC+10, BST=UTC+1, CST=UTC-6, MST=UTC-7, "
+        "EDT=UTC-4, PDT=UTC-7, CDT=UTC-5, MDT=UTC-6, SGT=UTC+8, "
+        "HKT=UTC+8, KST=UTC+9, WIB=UTC+7, IST(Israel)=UTC+2.\n"
+        "   Example: '5:39 PM IST' → IST is UTC+5:30 → subtract 5h30m → 12:09 PM UTC → cron: '9 12 * * *'\n"
+        "   Example: '9 AM EST' → EST is UTC-5 → add 5h → 2 PM UTC → cron: '0 14 * * *'\n"
         "   If no: set schedule_intent to null.\n"
         "2. Decide if this is a COMPOUND query that clearly requires multiple specialists "
         "(e.g. 'What is 2+2 AND summarise this article'). "
@@ -385,14 +359,14 @@ async def llm_route_and_detect(
         "{\n"
         '  "target": "<agent_name>",\n'
         '  "reason": "<short reason>",\n'
-        f'  "schedule_intent": {{"cron": "<cron_expression in {scheduler_tz}>", "prompt": "<task to run on schedule>"}}\n'
+        '  "schedule_intent": {"cron": "<cron in UTC>", "prompt": "<task to run on schedule>", "original_time": "<what user said>"}\n'
         "}\n\n"
         f"Available agents (name: role | skills — system_prompt excerpt):\n{agent_list}\n\n"
         f"User request: {user_input}"
     )
 
     response = await llm.ainvoke(routing_prompt)
-    usage = _extract_usage(response)   # always a plain dict here
+    usage = _extract_usage(response)
     reply = response.content.strip()
 
     json_match = re.search(r'\{.*\}', reply, re.DOTALL)
@@ -442,7 +416,6 @@ def build_agent_graph(
     specialists = [s for s in specialists if s["name"] != orchestrator["name"]]
     specialist_map = {a["name"]: a for a in specialists}
 
-    # ── Orchestrator node ─────────────────────────────────────────────────────
     async def orchestrator_node(state: WorkflowState) -> WorkflowState:
         state["current_step"] = "orchestrator"
         state["status"] = "running"
@@ -459,7 +432,6 @@ def build_agent_graph(
             previous_routing=prev_routing,
             previous_output=prev_output,
         )
-        # usage is TokenUsage here; _accumulate_usage handles it via _to_usage_dict
         targets: list[str] = route.get("targets") or [route.get("target", specialists[0]["name"])]
         targets = [t for t in targets if t in specialist_map]
         if not targets:
@@ -489,20 +461,19 @@ def build_agent_graph(
             return target
         return specialists[0]["name"]
 
-    # ── Schedule terminal node ────────────────────────────────────────────────
     async def schedule_end_node(state: WorkflowState) -> WorkflowState:
         intent = state["schedule_intent"]
-        tz = get_settings().scheduler_timezone
+        original_time = intent.get("original_time", "")
+        original_note = f" (converted from {original_time})" if original_time else ""
         state["final_response"] = (
             f"\u2705 Got it! I'll schedule this for you.\n"
-            f"Cron: `{intent['cron']}` ({tz})\n"
+            f"Cron: `{intent['cron']}` (UTC{original_note})\n"
             f"Task: {intent['prompt']}"
         )
         state["status"]       = "scheduled"
         state["current_step"] = "schedule_end"
         return state
 
-    # ── Fan-out node ──────────────────────────────────────────────────────────
     async def fanout_node(state: WorkflowState) -> WorkflowState:
         targets        = state.get("routing_targets") or [state.get("routing_decision")]
         all_responses: list[str]  = []
@@ -559,7 +530,6 @@ def build_agent_graph(
         state["token_usage"]    = acc_usage
         return state
 
-    # ── Retry / feedback-check node ───────────────────────────────────────────
     def retry_check_node(state: WorkflowState) -> WorkflowState:
         response    = state.get("final_response", "").strip()
         retry_count = state.get("retry_count", 0)
@@ -591,7 +561,6 @@ def build_agent_graph(
     def route_from_retry_check(state: WorkflowState) -> str:
         return "orchestrator" if state.get("needs_retry") else "__end__"
 
-    # ── Specialist node factory ───────────────────────────────────────────────
     def make_specialist_node(agent_config: dict):
         async def specialist_node(state: WorkflowState) -> WorkflowState:
             name       = agent_config["name"]
@@ -638,7 +607,6 @@ def build_agent_graph(
         specialist_node.__name__ = agent_config["name"]
         return specialist_node
 
-    # ── Assemble the graph ────────────────────────────────────────────────────
     graph = StateGraph(WorkflowState)
     graph.add_node("orchestrator",     orchestrator_node)
     graph.add_node("__schedule_end__", schedule_end_node)

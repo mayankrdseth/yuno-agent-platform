@@ -13,7 +13,7 @@ from app.models.workflow_template import WorkflowTemplate
 
 logger = logging.getLogger(__name__)
 
-# ─── Pre-built templates ────────────────────────────────────────────────────
+# ─── Pre-built templates ─────────────────────────────────────────────────────────────────────────
 BUILTIN_TEMPLATES = [
     {
         "name": "Research Hub",
@@ -37,7 +37,7 @@ BUILTIN_TEMPLATES = [
     },
 ]
 
-# ─── Pre-built agents ────────────────────────────────────────────────────────
+# ─── Pre-built agents ────────────────────────────────────────────────────────────────────────────
 BUILTIN_AGENTS = [
     {
         "name": "ResearchOrchestrator",
@@ -159,8 +159,7 @@ BUILTIN_AGENTS = [
     },
 ]
 
-# ─── Safe migration: add columns that may be missing in an existing DB ───────
-# Each entry: (column_name, DDL_type_and_default)
+# ─── Safe migration: add columns that may be missing in an existing DB ───────────
 _AGENT_MIGRATIONS = [
     ("schedule",          "VARCHAR(120)"),
     ("schedule_prompt",   "TEXT"),
@@ -179,32 +178,54 @@ async def _migrate_agents_table() -> None:
                 )
                 logger.info("Migration: added column agents.%s", col_name)
             except Exception:
-                # Column already exists — SQLite raises OperationalError; safe to ignore
                 pass
 
 
 async def _seed_builtin_agents() -> None:
+    """
+    Insert new agents and UPDATE existing ones.
+
+    Fields updated on every startup for existing agents:
+      - skills, interaction_rules, forbidden_topics, system_prompt
+
+    This ensures that an already-running DB picks up the latest agent
+    definitions on next restart without requiring a DB wipe.
+    Fields NOT overwritten: tools, channels, model, is_active, memory_enabled,
+    max_iterations, max_output_chars, schedule, schedule_prompt
+    (those may have been customised by the user via the API).
+    """
     async with AsyncSessionLocal() as db:
         for agent_def in BUILTIN_AGENTS:
             result = await db.execute(select(Agent).where(Agent.name == agent_def["name"]))
-            if result.scalar_one_or_none():
-                continue
-            db.add(Agent(
-                name=agent_def["name"],
-                role=agent_def["role"],
-                system_prompt=agent_def["system_prompt"],
-                model=agent_def["model"],
-                tools=json.dumps(agent_def["tools"]),
-                channels=json.dumps(agent_def["channels"]),
-                is_active=agent_def["is_active"],
-                max_iterations=agent_def["max_iterations"],
-                memory_enabled=agent_def["memory_enabled"],
-                forbidden_topics=json.dumps(agent_def["forbidden_topics"]),
-                max_output_chars=agent_def["max_output_chars"],
-                skills=json.dumps(agent_def.get("skills", [])),
-                interaction_rules=json.dumps(agent_def.get("interaction_rules", [])),
-            ))
-            logger.info("Seeded agent: %s (%s)", agent_def["name"], agent_def["role"])
+            existing = result.scalar_one_or_none()
+
+            if existing is None:
+                # Fresh insert
+                db.add(Agent(
+                    name=agent_def["name"],
+                    role=agent_def["role"],
+                    system_prompt=agent_def["system_prompt"],
+                    model=agent_def["model"],
+                    tools=json.dumps(agent_def["tools"]),
+                    channels=json.dumps(agent_def["channels"]),
+                    is_active=agent_def["is_active"],
+                    max_iterations=agent_def["max_iterations"],
+                    memory_enabled=agent_def["memory_enabled"],
+                    forbidden_topics=json.dumps(agent_def["forbidden_topics"]),
+                    max_output_chars=agent_def["max_output_chars"],
+                    skills=json.dumps(agent_def.get("skills", [])),
+                    interaction_rules=json.dumps(agent_def.get("interaction_rules", [])),
+                ))
+                logger.info("Seeded agent: %s (%s)", agent_def["name"], agent_def["role"])
+            else:
+                # Update fields that should always reflect the latest definition.
+                # User-customisable fields (tools, model, channels, etc.) are preserved.
+                existing.skills = json.dumps(agent_def.get("skills", []))
+                existing.interaction_rules = json.dumps(agent_def.get("interaction_rules", []))
+                existing.forbidden_topics = json.dumps(agent_def["forbidden_topics"])
+                existing.system_prompt = agent_def["system_prompt"]
+                logger.info("Updated agent: %s (skills/interaction_rules/system_prompt)", agent_def["name"])
+
         await db.commit()
 
 
@@ -233,6 +254,6 @@ async def init_db() -> None:
     # 2. Migrate existing tables (add missing columns)
     await _migrate_agents_table()
 
-    # 3. Seed built-in data
+    # 3. Seed / update built-in data
     await _seed_builtin_agents()
     await _seed_builtin_templates()

@@ -17,11 +17,6 @@ class Settings(BaseSettings):
 
     default_model: str = "llama-3.3-70b-versatile"
 
-    # Timezone used by APScheduler and for cron expression generation.
-    # Must be a valid tz database name, e.g. "UTC", "Asia/Kolkata", "America/New_York".
-    # Set SCHEDULER_TIMEZONE=Asia/Kolkata in your .env for IST deployments.
-    scheduler_timezone: str = "UTC"
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
