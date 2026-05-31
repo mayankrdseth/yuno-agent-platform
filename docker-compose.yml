@@ -1,13 +1,19 @@
 # docker-compose.yml
 #
 # Usage:
-#   1. Make sure .env exists (copy from .env.example and fill in GROQ_API_KEY)
+#   1. Copy .env.example to .env and fill in all keys including NGROK_AUTHTOKEN
 #   2. docker compose up --build
 #
 # NO manual database commands needed.
 # The backend runs `init_db()` at startup which:
 #   - Creates all tables via SQLAlchemy (SQLite, no migrations tool needed)
 #   - Seeds the 6 built-in agents and 2 workflow templates if not already present
+#
+# Telegram webhook is registered automatically:
+#   - The `ngrok` container opens a tunnel to port 8000
+#   - The `webhook-setter` container waits for ngrok, fetches the public URL,
+#     and calls Telegram setWebhook automatically
+#   - On every `docker compose up` a fresh URL is registered — no manual curl needed
 #
 # To wipe and reseed from scratch:
 #   docker compose down -v   (<- the -v flag removes the yuno-db volume)
@@ -60,6 +66,63 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  # ── ngrok tunnel ────────────────────────────────────────────────────────────
+  # Opens a public HTTPS tunnel to the backend on port 8000.
+  # Requires NGROK_AUTHTOKEN in .env (free at https://dashboard.ngrok.com).
+  # The ngrok API is exposed on port 4040 so the webhook-setter can query
+  # the assigned public URL.
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: yuno-ngrok
+    restart: unless-stopped
+    command: http backend:8000 --log stdout
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"   # ngrok web inspector (optional, handy for debugging)
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Telegram webhook auto-setter ────────────────────────────────────────────
+  # Runs once after ngrok is up: polls the ngrok API until a public URL appears,
+  # then calls Telegram setWebhook with that URL.
+  # Exits with code 0 on success so Docker doesn't keep restarting it.
+  webhook-setter:
+    image: alpine:3.19
+    container_name: yuno-webhook-setter
+    restart: "no"
+    env_file:
+      - .env
+    depends_on:
+      - ngrok
+    command: >
+      sh -c "
+        apk add --no-cache curl jq > /dev/null 2>&1 &&
+        echo '[webhook-setter] Waiting for ngrok tunnel...' &&
+        for i in $(seq 1 30); do
+          NGROK_URL=$$(curl -s http://ngrok:4040/api/tunnels | jq -r '.tunnels[0].public_url // empty') &&
+          [ -n "$$NGROK_URL" ] && break ||
+          echo '[webhook-setter] Attempt '$$i'/30 — ngrok not ready yet, retrying in 2s...' &&
+          sleep 2;
+        done &&
+        if [ -z "$$NGROK_URL" ]; then
+          echo '[webhook-setter] ERROR: ngrok tunnel did not start after 60s. Check NGROK_AUTHTOKEN.' &&
+          exit 1;
+        fi &&
+        WEBHOOK_URL=$$NGROK_URL/telegram/webhook &&
+        echo "[webhook-setter] Tunnel ready: $$NGROK_URL" &&
+        echo "[webhook-setter] Registering webhook: $$WEBHOOK_URL" &&
+        RESPONSE=$$(curl -s -X POST \
+          https://api.telegram.org/bot$$TELEGRAM_BOT_TOKEN/setWebhook \
+          -H 'Content-Type: application/json' \
+          -d "{\"url\": \"$$WEBHOOK_URL\", \"secret_token\": \"$$TELEGRAM_WEBHOOK_SECRET\"}") &&
+        echo "[webhook-setter] Telegram response: $$RESPONSE" &&
+        echo $$RESPONSE | jq -e '.ok == true' > /dev/null &&
+        echo '[webhook-setter] Webhook registered successfully!' ||
+        echo '[webhook-setter] WARNING: Telegram returned an error — check your BOT_TOKEN and WEBHOOK_SECRET'
+      "
 
 volumes:
   yuno-db:
