@@ -291,6 +291,7 @@ p {
   border-color: rgba(255, 255, 255, 0.06);
 }
 
+/* ─── ReactFlow node default (fallback) ─── */
 .react-flow__node-default {
   background: #151c28;
   color: var(--text);
@@ -300,19 +301,85 @@ p {
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
 }
 
+/* ─── ReactFlow Controls panel ─── */
 .react-flow__controls {
-  box-shadow: none;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  border: 1px solid #3a4560;
+  border-radius: 10px;
   overflow: hidden;
+  background: #141927;
 }
 
 .react-flow__controls-button {
-  background: #131826;
-  color: var(--text);
-  border-bottom: 1px solid var(--border);
+  background: #141927;
+  border: none;
+  border-bottom: 1px solid #2a3145;
+  color: #c8d0e8;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
 }
 
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.react-flow__controls-button:hover {
+  background: #1e2640;
+  color: #6ee7c8;
+}
+
+.react-flow__controls-button:active {
+  background: #253050;
+  color: #28c7a2;
+}
+
+/* Key fix: SVG icons use currentColor for fill */
+.react-flow__controls-button svg {
+  fill: currentColor;
+  stroke: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* ─── ReactFlow MiniMap ─── */
+.react-flow__minimap {
+  background: #0d1119 !important;
+  border: 1px solid #2a3145;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(110, 231, 200, 0.06);
+}
+
+.react-flow__minimap-node {
+  fill: #2a3a55;
+  stroke: none;
+}
+
+/* ─── Selection box ─── */
+.react-flow__selection {
+  background: rgba(110, 231, 200, 0.06);
+  border: 1px solid rgba(110, 231, 200, 0.4);
+}
+
+/* ─── Attribution (dim it) ─── */
+.react-flow__attribution {
+  background: transparent !important;
+  color: #3a4560 !important;
+}
+
+.react-flow__attribution a {
+  color: #3a4560 !important;
+}
+
+/* ─── Background dots ─── */
 .react-flow__background {
   background-color: #0d1119;
 }
