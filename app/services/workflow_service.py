@@ -240,12 +240,26 @@ async def run_workflow(
         await publish({"run_id": run_id, "sender": "system", "receiver": None,
                        "content": f"Completed after {retry_count} retry(ies).", "type": "log"})
 
+    # ── Persist tool calls as structured JSON ─────────────────────────────────
+    # Content is stored as a JSON string so the frontend Tool Calls tab can parse
+    # it into { tool, input, output } and render each field distinctly.
+    # The "result" key is truncated to 500 chars to keep the DB row readable;
+    # the full result is already visible in the Timeline tab via the log entry.
     for tc in result.get("tool_calls", []):
-        msg = f"Tool called: {tc['tool']}({tc['input']}) → {tc['result'][:200]}"
-        await add_message(db, run_id, result.get("routing_decision", "agent"),
-                          msg, receiver=None, message_type="tool_call")
-        await publish({"run_id": run_id, "sender": result.get("routing_decision", "agent"),
-                       "receiver": None, "content": msg, "type": "tool_call"})
+        structured = json.dumps({
+            "tool":   tc.get("tool", "unknown"),
+            "input":  tc.get("input", ""),
+            "output": str(tc.get("result", ""))[:500],
+        })
+        caller = tc.get("agent") or result.get("routing_decision", "agent")
+        await add_message(db, run_id, caller, structured, receiver=None, message_type="tool_call")
+        await publish({
+            "run_id": run_id,
+            "sender": caller,
+            "receiver": None,
+            "content": structured,
+            "type": "tool_call",
+        })
 
     # Normalise token_usage regardless of whether it's a TokenUsage dataclass or dict
     usage = _usage_as_dict(result.get("token_usage"))
