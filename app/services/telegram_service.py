@@ -190,8 +190,9 @@ async def unschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from app.db.session import AsyncSessionLocal
     from app.models.workflow_run import WorkflowRun
+    from app.runtime.agent_graph import _estimate_cost
     from app.services.run_service import complete_run, create_run
-    from app.services.workflow_service import run_workflow
+    from app.services.workflow_service import _usage_as_dict, run_workflow
 
     if not update.message or not update.message.text:
         return
@@ -224,21 +225,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 session_key=session_key,
             )
 
+            # ── Extract token usage & cost so run history shows them ─────────
+            usage = _usage_as_dict(result.get("token_usage"))
+            # Identify the orchestrator model for cost estimation
+            from app.models.agent import Agent
+            from sqlalchemy import select as sa_select
+            orch_result = await db.execute(
+                sa_select(Agent).where(Agent.role == "orchestrator", Agent.is_active == True)  # noqa: E712
+            )
+            orch = orch_result.scalars().first()
+            orch_model = orch.model if orch else ""
+            cost = _estimate_cost(orch_model, usage)
+
             run_obj = await db.get(WorkflowRun, run.id)
             if run_obj:
-                await complete_run(db, run_obj, result["final_response"])
+                await complete_run(
+                    db,
+                    run_obj,
+                    result["final_response"],
+                    total_tokens=usage.get("total_tokens", 0),
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                    estimated_cost_usd=cost,
+                )
 
             # ── Schedule confirmation ──────────────────────────────────────
             schedule_intent = result.get("schedule_intent")
             if schedule_intent:
                 from app.services.scheduler_service import get_scheduler
                 scheduler = get_scheduler()
-                from app.models.agent import Agent
-                from sqlalchemy import select
-                orch_result = await db.execute(
-                    select(Agent).where(Agent.role == "orchestrator", Agent.is_active == True)  # noqa: E712
-                )
-                orch = orch_result.scalars().first()
                 next_run = "(check /schedule for next run time)"
                 if orch:
                     job = scheduler.get_job(f"agent_schedule_{orch.id}")
