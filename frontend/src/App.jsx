@@ -30,9 +30,20 @@ const AVAILABLE_MODELS = [
 function CustomAgentNode({ data }) {
   const tools = data.tools || [];
   const channels = data.channels || [];
-  const visibleTools = tools.slice(0, 3);
-  const extraTools = tools.length - visibleTools.length;
   const isOrchestrator = data.role === "orchestrator";
+
+  // For orchestrators: always pin calculator + datetime first, then other tools.
+  // For regular agents: show up to 3 tools with +N overflow.
+  let displayTools;
+  let extraTools = 0;
+  if (isOrchestrator) {
+    const pinned = ["calculator", "datetime"].filter((t) => tools.includes(t));
+    const rest = tools.filter((t) => !pinned.includes(t));
+    displayTools = [...pinned, ...rest];
+  } else {
+    displayTools = tools.slice(0, 3);
+    extraTools = tools.length - displayTools.length;
+  }
 
   return (
     <div style={{
@@ -43,7 +54,7 @@ function CustomAgentNode({ data }) {
       borderRadius: 10,
       padding: "10px 14px",
       minWidth: 180,
-      maxWidth: 220,
+      maxWidth: 240,
       boxShadow: isOrchestrator ? "0 0 10px rgba(245,158,11,0.15)" : "0 4px 16px rgba(0,0,0,0.4)",
       cursor: "grab",
     }}>
@@ -56,10 +67,15 @@ function CustomAgentNode({ data }) {
       </div>
       <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e8e8", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{data.name}</div>
       <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{data.role}</div>
-      {visibleTools.length > 0 && (
+      {displayTools.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
-          {visibleTools.map((t) => (
-            <span key={t} style={{ background: "#f59e0b22", color: "#f59e0b", border: "1px solid #f59e0b44", borderRadius: 4, fontSize: 10, padding: "1px 5px", fontWeight: 600 }}>🔧 {t}</span>
+          {displayTools.map((t) => (
+            <span key={t} style={{
+              background: isOrchestrator && (t === "calculator" || t === "datetime") ? "#1affd522" : "#f59e0b22",
+              color: isOrchestrator && (t === "calculator" || t === "datetime") ? "#1affd5" : "#f59e0b",
+              border: `1px solid ${isOrchestrator && (t === "calculator" || t === "datetime") ? "#1affd544" : "#f59e0b44"}`,
+              borderRadius: 4, fontSize: 10, padding: "1px 5px", fontWeight: 600,
+            }}>🔧 {t}</span>
           ))}
           {extraTools > 0 && <span style={{ fontSize: 10, color: "#6b7280" }}>+{extraTools} more</span>}
         </div>
@@ -97,7 +113,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
       ? agent.forbidden_topics.join(", ")
       : (agent.forbidden_topics || ""),
     max_output_chars: agent.max_output_chars ?? "",
-    // Capability fields
     skills: Array.isArray(agent.skills)
       ? agent.skills.join(", ")
       : (agent.skills || ""),
@@ -127,7 +142,6 @@ function EditAgentModal({ agent, onClose, onSaved }) {
           : [],
         max_output_chars: form.max_output_chars ? parseInt(form.max_output_chars, 10) : null,
         channels: isOrch ? form.channels : [],
-        // Parse comma-separated skills and newline-separated interaction_rules
         skills: form.skills
           ? form.skills.split(",").map((s) => s.trim()).filter(Boolean)
           : [],
@@ -191,14 +205,28 @@ function EditAgentModal({ agent, onClose, onSaved }) {
             </select>
           </div>
           <div>
-            <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
+            <div className="muted-small" style={{ marginBottom: 6 }}>Tools
+              {isOrch && (
+                <span style={{ marginLeft: 8, fontSize: 10, color: "#1affd5" }}>
+                  ⚡ calculator &amp; datetime always active on orchestrators
+                </span>
+              )}
+            </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {AVAILABLE_TOOLS.map((tool) => (
-                <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
-                  <input type="checkbox" checked={form.tools.includes(tool)} onChange={() => toggleTool(tool)} />
-                  {tool}
-                </label>
-              ))}
+              {AVAILABLE_TOOLS.map((tool) => {
+                const isPinned = isOrch && (tool === "calculator" || tool === "datetime");
+                return (
+                  <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: isPinned ? "default" : "pointer", opacity: isPinned ? 0.7 : 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={isPinned ? true : form.tools.includes(tool)}
+                      disabled={isPinned}
+                      onChange={() => !isPinned && toggleTool(tool)}
+                    />
+                    {tool}{isPinned ? " 🔒" : ""}
+                  </label>
+                );
+              })}
             </div>
           </div>
           {isOrch && (
@@ -525,15 +553,21 @@ export default function App() {
 
   async function createAgent(e) {
     e.preventDefault();
+    const isOrch = agentForm.role === "orchestrator";
+    // Always include calculator + datetime for orchestrators
+    let tools = agentForm.tools;
+    if (isOrch) {
+      tools = [...new Set(["calculator", "datetime", ...tools])];
+    }
     const payload = {
       ...agentForm,
+      tools,
       schedule: agentForm.schedule || null,
       forbidden_topics: agentForm.forbidden_topics
         ? agentForm.forbidden_topics.split(",").map((s) => s.trim()).filter(Boolean)
         : [],
       max_output_chars: agentForm.max_output_chars ? parseInt(agentForm.max_output_chars, 10) : null,
-      channels: isOrchestratorForm ? agentForm.channels : [],
-      // Parse comma-separated skills string into array
+      channels: isOrch ? agentForm.channels : [],
       skills: agentForm.skills
         ? agentForm.skills.split(",").map((s) => s.trim()).filter(Boolean)
         : [],
@@ -747,14 +781,28 @@ export default function App() {
               </select>
             </div>
             <div>
-              <div className="muted-small" style={{ marginBottom: 6 }}>Tools</div>
+              <div className="muted-small" style={{ marginBottom: 6 }}>Tools
+                {isOrchestratorForm && (
+                  <span style={{ marginLeft: 8, fontSize: 10, color: "#1affd5" }}>
+                    ⚡ calculator &amp; datetime auto-included for orchestrators
+                  </span>
+                )}
+              </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {AVAILABLE_TOOLS.map((tool) => (
-                  <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: "pointer" }}>
-                    <input type="checkbox" checked={agentForm.tools.includes(tool)} onChange={() => toggleTool(tool)} />
-                    {tool}
-                  </label>
-                ))}
+                {AVAILABLE_TOOLS.map((tool) => {
+                  const isPinned = isOrchestratorForm && (tool === "calculator" || tool === "datetime");
+                  return (
+                    <label key={tool} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, cursor: isPinned ? "default" : "pointer", opacity: isPinned ? 0.7 : 1 }}>
+                      <input
+                        type="checkbox"
+                        checked={isPinned ? true : agentForm.tools.includes(tool)}
+                        disabled={isPinned}
+                        onChange={() => !isPinned && toggleTool(tool)}
+                      />
+                      {tool}{isPinned ? " 🔒" : ""}
+                    </label>
+                  );
+                })}
               </div>
             </div>
             {isOrchestratorForm ? (
@@ -805,268 +853,4 @@ export default function App() {
                           <span style={{ flexShrink: 0, fontSize: 9, background: "#f59e0b18", color: "#f59e0b", border: "1px solid #f59e0b35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>ORCH</span>
                         ) : null}
                         {agent.schedule ? (
-                          <span title={`Scheduled: ${agent.schedule}`} style={{ flexShrink: 0, fontSize: 9, background: "#22c55e18", color: "#22c55e", border: "1px solid #22c55e35", borderRadius: 3, padding: "1px 5px", fontWeight: 700 }}>⏰ SCHED</span>
-                        ) : null}
-                      </div>
-                      <div className="muted-small">{agent.role} · {agent.model?.split("-")[0] ?? ""}</div>
-                    </div>
-                    <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                      <button onClick={() => setEditingAgent(agent)} title="Edit agent"
-                        style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #1affd530", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
-                        ✏
-                      </button>
-                      {!inGraph ? (
-                        <button onClick={() => addAgentToWorkflow(agent)}
-                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer", whiteSpace: "nowrap" }}>
-                          + Add
-                        </button>
-                      ) : (
-                        <button onClick={() => removeAgentFromWorkflow(agent.id)}
-                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #f87171", background: "transparent", color: "#f87171", cursor: "pointer", whiteSpace: "nowrap" }}>
-                          − Remove
-                        </button>
-                      )}
-                      <button onClick={() => deleteAgent(agent.id)} title="Delete from database"
-                        style={{ fontSize: 13, padding: "3px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
-                        🗑
-                      </button>
-                    </div>
-                  </div>
-                  {tools.length > 0 ? (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {tools.map((t) => <span key={t} className="badge" style={{ background: "#f59e0b20", color: "#f59e0b", fontSize: 10 }}>🔧 {t}</span>)}
-                    </div>
-                  ) : null}
-                  {channels.length > 0 ? (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {channels.map((c) => <span key={c} className="badge" style={{ background: "#0ea5e920", color: "#0ea5e9", fontSize: 10 }}>📡 {c}</span>)}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-            {agents.length === 0 ? <div className="muted-small">No agents yet.</div> : null}
-          </div>
-        </section>
-      </aside>
-
-      <main className="main-content">
-        <section className="top-grid">
-
-          {/* ── Visual Workflow Builder ── */}
-          <div className="panel">
-            <div className="panel-header">
-              <div>
-                <div className="eyebrow">Workflow</div>
-                <h2>Visual Builder</h2>
-              </div>
-              <div className="muted-small" style={{ fontSize: 11, marginTop: 4 }}>
-                Drag handles to connect · Select + Delete removes edge/node · Only canvas agents run
-              </div>
-            </div>
-            <div className="flow-wrap">
-              <ReactFlow
-                nodes={nodes} edges={edges}
-                nodeTypes={nodeTypes}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                deleteKeyCode="Delete"
-                fitView
-              >
-                <Background color="#2d3348" gap={20} />
-                <Controls />
-                <MiniMap nodeColor={(n) => n.data?.role === "orchestrator" ? "#f59e0b" : "#1a1f2e"}
-                  maskColor="rgba(10,12,20,0.7)"
-                  style={{ background: "#0f1117", border: "1px solid #2d3348" }} />
-              </ReactFlow>
-            </div>
-          </div>
-
-          {/* ── Right column: Run + Templates ── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-            {/* Run Workflow */}
-            <div className="panel">
-              <div className="eyebrow">Execution</div>
-              <h2>Run Workflow</h2>
-              <div className="muted-small" style={{ marginBottom: 8, fontSize: 11 }}>
-                Runs only the {nodes.length} agent{nodes.length !== 1 ? "s" : ""} currently on the canvas.
-                {!nodes.some((n) => n.data.role === "orchestrator") && nodes.length > 0 ? (
-                  <span style={{ color: "#f59e0b", marginLeft: 6 }}>⚠ No orchestrator on canvas.</span>
-                ) : null}
-              </div>
-              <textarea rows="4" value={workflowInput} onChange={(e) => setWorkflowInput(e.target.value)} />
-              {runError ? (
-                <div style={{ color: "#f87171", fontSize: 12, marginTop: 6, padding: "6px 10px", background: "#f8717115", borderRadius: 6, border: "1px solid #f8717130" }}>⚠ {runError}</div>
-              ) : null}
-              <button className="primary-btn" onClick={runWorkflow} disabled={loading} style={{ marginTop: 10 }}>
-                {loading ? "Running..." : `Run workflow (${nodes.length} agents)`}
-              </button>
-            </div>
-
-            {/* Workflow Templates */}
-            <div className="panel">
-              <div className="eyebrow">Templates</div>
-              <h2>Workflow Templates</h2>
-              <div style={{ marginBottom: 12 }}>
-                <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Load onto canvas</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {templates.map((tpl) => {
-                    const isActive = tpl.id === activeTemplateId;
-                    const builtinBadge = tpl.is_builtin === 1
-                      ? <span style={{ flexShrink: 0, fontSize: 9, background: "#1affd520", color: "#1affd5", border: "1px solid #1affd540", borderRadius: 3, padding: "1px 5px" }}>BUILT-IN</span>
-                      : null;
-                    return (
-                      <div key={tpl.id} style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between",
-                        background: isActive ? "#1affd508" : "#0f1117",
-                        borderRadius: 6, padding: "7px 10px",
-                        border: isActive ? "1px solid #1affd540" : "1px solid #2d3348",
-                        transition: "border-color 0.2s, background 0.2s",
-                        gap: 8, minWidth: 0,
-                      }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: "#e8e8e8", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                            {isActive ? <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#1affd5", display: "inline-block", flexShrink: 0 }} /> : null}
-                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tpl.name}</span>
-                            {builtinBadge}
-                          </div>
-                          {tpl.description ? <div className="muted-small" style={{ fontSize: 11, marginTop: 2 }}>{tpl.description}</div> : null}
-                        </div>
-                        <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                          <button onClick={() => loadTemplate(tpl)}
-                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #1affd5", background: "transparent", color: "#1affd5", cursor: "pointer" }}>
-                            Load
-                          </button>
-                          {tpl.is_builtin !== 1 ? (
-                            <button onClick={() => deleteTemplate(tpl.id)}
-                              style={{ fontSize: 11, padding: "3px 8px", borderRadius: 4, border: "1px solid #ef444430", background: "transparent", color: "#ef4444", cursor: "pointer" }}>
-                              🗑
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {templates.length === 0 ? <div className="muted-small" style={{ fontSize: 11 }}>No templates yet.</div> : null}
-                </div>
-              </div>
-
-              {/* Save current canvas as template */}
-              <div style={{ borderTop: "1px solid #2d3348", paddingTop: 12 }}>
-                <div className="muted-small" style={{ marginBottom: 6, fontSize: 11 }}>Save canvas as template</div>
-                <input placeholder="Workflow name" value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                  style={{ marginBottom: 6 }} />
-                <input placeholder="Description (optional)" value={templateDesc}
-                  onChange={(e) => setTemplateDesc(e.target.value)}
-                  style={{ marginBottom: 8 }} />
-                <button onClick={saveTemplate} disabled={savingTemplate} className="primary-btn" style={{ width: "100%", fontSize: 12 }}>
-                  {savingTemplate ? "Saving..." : "Save as template"}
-                </button>
-                {templateMsg ? <div style={{ fontSize: 11, marginTop: 6, color: templateMsg.startsWith("✓") ? "#22c55e" : "#f59e0b" }}>{templateMsg}</div> : null}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ── Bottom Panel ── */}
-        <section className="bottom-panel">
-          <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #2d3348", paddingInline: 16, paddingTop: 12 }}>
-            <button style={tabStyle("runs")} onClick={() => setBottomTab("runs")}>Run History</button>
-            <button style={tabStyle("messages")} onClick={() => setBottomTab("messages")}>
-              Messages {selectedRun ? `— Run #${selectedRun.id}` : ""}
-            </button>
-            <button style={tabStyle("monitor")} onClick={() => setBottomTab("monitor")}>Live Monitor</button>
-            <button style={tabStyle("scheduled")} onClick={() => setBottomTab("scheduled")}>Scheduled Jobs</button>
-          </div>
-
-          <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
-            {bottomTab === "runs" && (
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div className="eyebrow">History</div>
-                  <button onClick={loadRuns}
-                    style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>
-                    ↻ Refresh
-                  </button>
-                </div>
-                <div className="list">
-                  {runs.map((run) => (
-                    <div key={run.id} className="list-item" style={{ cursor: "pointer", flexDirection: "column", alignItems: "flex-start", gap: 4 }}
-                      onClick={() => loadMessages(run.id)}>
-                      <div style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center" }}>
-                        <strong style={{ fontSize: 13 }}>Run #{run.id}</strong>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
-                          background: run.status === "completed" ? "#22c55e20" : run.status === "failed" ? "#ef444420" : "#f59e0b20",
-                          color: run.status === "completed" ? "#22c55e" : run.status === "failed" ? "#ef4444" : "#f59e0b",
-                        }}>{run.status}</span>
-                      </div>
-                      <div className="muted-small" style={{ fontSize: 11 }}>{run.input_text?.slice(0, 80)}{run.input_text?.length > 80 ? "..." : ""}</div>
-                      <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#6b7280" }}>
-                        {run.total_tokens ? <span>🔢 {run.total_tokens} tokens</span> : null}
-                        {/* FIX: API returns estimated_cost_usd, not total_cost_usd */}
-                        {run.estimated_cost_usd ? <span>💰 ${run.estimated_cost_usd.toFixed(4)}</span> : null}
-                        {run.created_at ? <span>🕐 {new Date(run.created_at).toLocaleTimeString()}</span> : null}
-                      </div>
-                    </div>
-                  ))}
-                  {runs.length === 0 ? <div className="muted-small">No runs yet. Run a workflow above.</div> : null}
-                </div>
-              </div>
-            )}
-
-            {bottomTab === "messages" && (
-              <div>
-                <div className="eyebrow" style={{ marginBottom: 10 }}>
-                  {selectedRun ? `Messages — Run #${selectedRun.id} (${selectedRun.status})` : "Select a run to view messages"}
-                </div>
-                <div className="list">
-                  {messages.map((msg) => (
-                    <div key={msg.id} className="list-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <MessageTypeTag type={msg.message_type} />
-                        {msg.agent_name ? <span style={{ fontSize: 11, color: "#6b7280" }}>{msg.agent_name}</span> : null}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#d1d5db", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
-                    </div>
-                  ))}
-                  {messages.length === 0 ? <div className="muted-small">No messages. Click a run above.</div> : null}
-                </div>
-              </div>
-            )}
-
-            {bottomTab === "monitor" && (
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div className="eyebrow">Live Events (WebSocket)</div>
-                  <button onClick={() => setLiveEvents([])}
-                    style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, border: "1px solid #2d3348", background: "transparent", color: "#6b7280", cursor: "pointer" }}>
-                    Clear
-                  </button>
-                </div>
-                <div className="list">
-                  {liveEvents.map((evt, i) => (
-                    <div key={i} className="list-item" style={{ flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <MessageTypeTag type={evt.type || "log"} />
-                        {evt.agent ? <span style={{ fontSize: 11, color: "#6b7280" }}>{evt.agent}</span> : null}
-                        {evt.run_id ? <span style={{ fontSize: 10, color: "#4b5563" }}>run #{evt.run_id}</span> : null}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#d1d5db", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{evt.content || JSON.stringify(evt)}</div>
-                    </div>
-                  ))}
-                  {liveEvents.length === 0 ? <div className="muted-small">Waiting for live events… Run a workflow to see activity.</div> : null}
-                </div>
-              </div>
-            )}
-
-            {bottomTab === "scheduled" && <ScheduledJobsPanel />}
-          </div>
-        </section>
-      </main>
-    </div>
-  );
-}
+                          <span title={`Scheduled: ${agent.schedule}`} style={
